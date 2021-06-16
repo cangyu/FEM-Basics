@@ -1,8 +1,7 @@
-clear; close all; clc;
+function [h, errnorm] = HW1(N)
 
 xa = 0.0;
 xb = 1.0;
-N = 512;
 
 h = (xb-xa) / N; h2 = h*h;
 Nm = N + 1;
@@ -89,8 +88,8 @@ for i = 1:Nm
     err(i) = u(P(i)) - sol(i);
 end
 
-disp(h);
-disp(max(abs(err)));
+errnorm = max(abs(err));
+end
 
 function [ret]=test(a, b, x, beta)
     h = b-a;
