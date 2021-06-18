@@ -1,4 +1,21 @@
-function [h, errnorm] = HW1(N)
+clear; close all; clc;
+
+N_CASE = 9;
+h = zeros(1, N_CASE);
+err = zeros(1, N_CASE);
+
+for i = 1:N_CASE
+    N = 2^i;
+    [ch, ce] = solve_1d_elliptic_pde(N);
+    h(i) = ch;
+    err(i) = ce;
+    fprintf("h=1/%d, |err|=%e\n", N, ce);
+end
+
+loglog(h, err, '-s')
+grid on
+
+function [h, errnorm] = solve_1d_elliptic_pde(N)
 
 xa = 0.0;
 xb = 1.0;
