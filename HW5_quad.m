@@ -173,3 +173,28 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T, Tb)
         bdry_node(2, node_idx+1) = Tb(6, elem_idx);
     end
 end
+
+function [ret] = psi1(x0, y0)
+    ret = 2.0 * (x0 * x0 + y0 * y0) + 4.0 * x0 * y0 - 3.0 * (x0 + y0) + 1.0;
+end
+
+function [ret] = psi2(x0, y0)
+    ret = x0 * (2.0 * x0 - 1.0);
+end
+
+function [ret] = psi3(x0, y0)
+    ret = y0 * (2.0 * y0 - 1.0);
+end
+
+function [ret] = psi4(x0, y0)
+    ret = 4.0 * x0 * (1.0 - x0 - y0);
+end
+
+function [ret] = psi5(x0, y0)
+    ret = 4.0 * x0 * y0;
+end
+
+function [ret] = psi6(x0, y0)
+    ret = 4.0 * y0 * (1.0 - x0 - y0);
+end
+
