@@ -1,24 +1,46 @@
 clear; close all; clc;
 
-solve_2d_elliptic_pde(2, 2);
+N_CASE = 7;
+h = zeros(1, N_CASE);
+err = zeros(3, N_CASE);
+
+for i = 1:N_CASE
+    N = 2^i;
+    [ch, ~, ce] = solve_2d_elliptic_pde(N, N);
+    h(i) = ch;
+    err(1,i) = ce(1);
+    err(2,i) = ce(2);
+    err(3,i) = ce(3);
+    fprintf("h=1/%d, |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", N, err(1,i), err(2,i), err(3,i));
+end
+
+loglog(h, err(1,:), '-s')
+hold on
+loglog(h, err(2,:), '-s')
+hold on
+loglog(h, err(3,:), '-s')
+grid on
+legend('inf','L2','H1','Location','northwest')
+
 
 function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
-    x_min = 0.0;
-    x_max = 1.0;
-    y_min = 0.0;
-    y_max = 1.0;
+    global P T Jac
+
+    x_min = 0.0; x_max = 1.0;
+    y_min = 0.0; y_max = 1.0;
     
     h1 = (x_max-x_min)/N1;
     h2 = (y_max-y_min)/N2;
     
-    N = 2*N1*N2;
-
     [P, T] = mesh_info_mat(x_min,x_max,y_min,y_max,N1,N2);
     
-    Pb = P;
-    Tb = T;
+    N = 2*N1*N2;
+    Nb = size(P, 2);
+    Nlb = 3;
         
     [boundary_edge, boundary_node] = boundary_info_mat(N1, N2, T);
+    
+    nbn = size(boundary_node, 2);
     
     Jac = zeros(N, 1);
     for i = 1:N1
@@ -32,8 +54,223 @@ function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
         end
     end
     
-    errnorm = 0;
+    gauss_quad_x0=[1.0/3, 1.0/5, 3.0/5, 1.0/5];
+    gauss_quad_y0=[1.0/3, 1.0/5, 1.0/5, 3.0/5];
+    gauss_quad_w=[-27.0/96, 25.0/96, 25.0/96, 25.0/96];
+    gauss_quad_n=4;
+    
+    A = zeros(Nb, Nb);
+    
+    % Assemble the stiffness matrix
+    for n = 1:N
+        for alpha = 1:Nlb
+            for beta = 1:Nlb
+                i = T(beta, n);
+                j = T(alpha, n);
+                
+                r = 0.0;
+                for k = 1:gauss_quad_n
+                    [x_loc, y_loc] = affine_mapping_back(n, gauss_quad_x0(k), gauss_quad_y0(k));
+                    tmp1 = grad_trial(alpha, n, x_loc, y_loc);
+                    tmp2 = grad_test(beta, n, x_loc, y_loc);
+                    tmp3 = c(x_loc, y_loc) * (tmp1(1)*tmp2(1) + tmp1(2)*tmp2(2));
+                    r = r + gauss_quad_w(k) * tmp3;
+                end
+                r = r * abs(Jac(n));
+                
+                A(i, j) = A(i, j) + r;
+            end
+        end
+    end
+    
+    b = zeros(Nb, 1);
+    
+    % Assemble the load vector
+    for n = 1:N
+        for beta = 1:Nlb
+            i = T(beta, n);
+            
+            r = 0.0;
+            for k = 1:gauss_quad_n
+                [x_loc, y_loc] = affine_mapping_back(n, gauss_quad_x0(k), gauss_quad_y0(k));
+                r = r + gauss_quad_w(k) * f(x_loc, y_loc) * test(beta, n, x_loc, y_loc);
+            end
+            r = r * abs(Jac(n));
+            b(i) = b(i) + r;
+        end
+    end
+    
+    % Boundary
+    for k = 1:nbn
+        if boundary_node(1, k) == -1
+            i = boundary_node(2, k);
+            A(i, :) = 0;
+            A(i, i) = 1;
+            b(i) = u(P(1, i), P(2, i));
+        end
+    end
+    
+    % Solve and Check
+    u_sol = A\b;
+    
+    errnorm = zeros(1, 3); %inf, L2, H1 respectively
+    for n = 1:N
+        for k = 1:gauss_quad_n
+            x0 = gauss_quad_x0(k);
+            y0 = gauss_quad_y0(k);
+            
+            [x, y] = affine_mapping_back(n, x0, y0);
+            
+            w = 0.0;
+            for i = 1:Nlb
+                w = w + u_sol(T(i, n)) * trial_ref(i, x0, y0);
+            end
+            
+            err = abs(w - u(x, y));
+            if err > errnorm(1)
+                errnorm(1) = err;
+            end
+        end
+    end
+    
+    for n = 1:N
+        res = 0.0;
+        for k = 1:gauss_quad_n
+            x0 = gauss_quad_x0(k);
+            y0 = gauss_quad_y0(k);
+            
+            [x, y] = affine_mapping_back(n, x0, y0);
+            
+            w = 0.0;
+            for i = 1:Nlb
+                w = w + u_sol(T(i, n)) * trial_ref(i, x0, y0);
+            end
+            
+            err = (w - u(x, y))^2;
+            res = res + gauss_quad_w(k) * err;
+        end
+        res = res * abs(Jac(n));
+        errnorm(2) = errnorm(2) + res;
+    end
+    errnorm(2) = sqrt(errnorm(2));
+    
+    for n = 1:N
+        res = 0.0;
+        for k = 1:gauss_quad_n
+            x0 = gauss_quad_x0(k);
+            y0 = gauss_quad_y0(k);
+            
+            [x, y] = affine_mapping_back(n, x0, y0);
+            
+            w = zeros(2, 1);
+            for i = 1:Nlb
+                w = w + u_sol(T(i, n)) * grad_trial(i, n, x, y);
+            end
+            
+            err = norm(w - grad_u(x, y))^2;
+            res = res + gauss_quad_w(k) * err;
+        end
+        res = res * abs(Jac(n));
+        errnorm(3) = errnorm(3) + res;
+    end
+    errnorm(3) = sqrt(errnorm(3));
+end
 
+function [ret] = grad_test(i, n, x, y)
+    global P T Jac
+
+    [x0, y0] = affine_mapping(n, x, y);
+    gp = grad_test_ref(i, x0, y0);
+    
+    dpx0 = gp(1);
+    dpy0 = gp(2);
+    
+    P1 = P(:, T(1, n));
+    P2 = P(:, T(2, n));
+    P3 = P(:, T(3, n));
+    
+    x1 = P1(1); y1 = P1(2);
+    x2 = P2(1); y2 = P2(2);
+    x3 = P3(1); y3 = P3(2);
+
+    ret = [dpx0 * (y3-y1) + dpy0 * (y1-y2); dpx0 * (x1-x3) + dpy0 * (x2-x1)] / Jac(n);
+end
+
+function [ret] = grad_trial(j, n, x, y)
+    ret = grad_test(j, n, x, y);
+end
+
+function [ret] = grad_test_ref(i, x0, y0)
+    switch(i)
+        case 1
+            ret = [-1; -1];
+        case 2
+            ret = [1; 0];
+        case 3
+            ret = [0; 1];
+        otherwise
+            ret = [0; 0];
+    end
+end
+
+function [ret] = grad_trial_ref(j, x0, y0)
+    ret = grad_test_ref(j, x0, y0);
+end
+
+function [ret] = test(i, n, x, y)
+    [x0, y0] = affine_mapping(n, x, y);
+    ret = test_ref(i, x0, y0);
+end
+
+function [ret] = trial(j, n, x, y)
+    ret = test(j, n, x, y);
+end
+
+function [ret] = test_ref(i, x0, y0)
+    switch(i)
+        case 1
+            ret = 1.0 - x0 - y0;
+        case 2
+            ret = x0;
+        case 3
+            ret = y0;
+        otherwise
+            ret = 0;
+    end
+end
+
+function [ret] = trial_ref(j, x0, y0)
+    ret = test_ref(j, x0, y0);
+end
+
+function [x, y] = affine_mapping_back(n, x0, y0)
+    global P T
+    
+    P1 = P(:, T(1, n));
+    P2 = P(:, T(2, n));
+    P3 = P(:, T(3, n));
+
+    x1 = P1(1); y1 = P1(2);
+    x2 = P2(1); y2 = P2(2);
+    x3 = P3(1); y3 = P3(2);
+    
+    x = (x2-x1)*x0 + (x3-x1)*y0 + x1;
+    y = (y2-y1)*x0 + (y3-y1)*y0 + y1;
+end
+
+function [x0, y0] = affine_mapping(n, x, y)
+    global P T Jac
+    
+    P1 = P(:, T(1, n));
+    P2 = P(:, T(2, n));
+    P3 = P(:, T(3, n));
+    
+    x1 = P1(1); y1 = P1(2);
+    x2 = P2(1); y2 = P2(2);
+    x3 = P3(1); y3 = P3(2);
+    
+    x0 = ((y3-y1)*(x-x1)-(x3-x1)*(y-y1))/Jac(n);
+    y0 = -((y2-y1)*(x-x1)-(x2-x1)*(y-y1))/Jac(n);
 end
 
 function [J] = calc_elem_jacobi(P1, P2, P3)
@@ -139,56 +376,20 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T)
     end
 end
 
-function [ret] = psi1(x0, y0)
-    ret = 1.0 - x0 - y0;
+function [ret] = c(x, y)
+    ret = 1.0;
 end
 
-function [ret] = psi2(x0, y0)
-    ret = x0;
+function [ret] = f(x, y)
+    ret = -y*(1-y)*(1-x-0.5*x*x)*exp(x+y)-x*(1-0.5*x)*(-3*y-y*y)*exp(x+y);
 end
 
-function [ret] = psi3(x0, y0)
-    ret = y0;
+function [ret] = u(x, y)
+    ret = x*y*(1-0.5*x)*(1-y)*exp(x+y);
 end
 
-function [ret] = grad_psi1(x0, y0)
-    ret = [-1;-1];
-end
-
-function [ret] = grad_psi2(x0, y0)
-    ret = [1; 0];
-end
-
-function [ret] = grad_psi3(x0, y0)
-    ret = [0; 1];
-end
-
-function [ret] = test(basis, x0, y0)
-    switch(basis)
-        case 1
-            ret = psi1(x0, y0);
-        case 2
-            ret = psi2(x0, y0);
-        case 3
-            ret = psi3(x0, y0);
-        otherwise
-            ret = 0;
-    end
-end
-
-function [ret] = grad_test(basis, x0, y0)
-    switch(basis)
-        case 1
-            ret = grad_psi1(x0, y0);
-        case 2
-            ret = grad_psi2(x0, y0);
-        case 3
-            ret = grad_psi3(x0, y0);
-        otherwise
-            ret = [0; 0];
-    end
-end
-
-function [ret] = grad_trial(basis, x0, y0)
-    ret = grad_test(basis, x0, y0);
+function [ret] = grad_u(x, y)
+    gx = y*(1-0.5*x)*(1-y)*exp(x+y) + x*y*(-0.5)*(1-y)*exp(x+y) + x*y*(1-0.5*x)*(1-y)*exp(x+y);
+    gy = x*(1-0.5*x)*(1-y)*exp(x+y) + x*y*(1-0.5*x)*(-1)*exp(x+y) + x*y*(1-0.5*x)*(1-y)*exp(x+y);
+    ret = [gx; gy];
 end
