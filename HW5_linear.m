@@ -22,7 +22,6 @@ loglog(h, err(3,:), '-s')
 grid on
 legend('inf','L2','H1','Location','northwest')
 
-
 function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
     global P T Jac
 
