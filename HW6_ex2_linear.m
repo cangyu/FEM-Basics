@@ -358,7 +358,7 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T)
         
         if k==n1
             bdry_node(1, node_idx+1) = -2;
-            bdry_node(2, node_idx) = T(2, elem_idx);
+            bdry_node(2, node_idx+1) = T(2, elem_idx);
         end
     end
     
