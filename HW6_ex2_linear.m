@@ -25,8 +25,8 @@ legend('inf','L2','H1','Location','northwest')
 function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
     global P T Jac
 
-    x_min = 0.0; x_max = 1.0;
-    y_min = 0.0; y_max = 1.0;
+    x_min = -1.0; x_max = 1.0;
+    y_min = -1.0; y_max = 1.0;
     
     h1 = (x_max-x_min)/N1;
     h2 = (y_max-y_min)/N2;
@@ -75,10 +75,10 @@ function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
                 
                 r = 0.0;
                 for k = 1:gq_tri_n
-                    [x_loc, y_loc] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
-                    tmp1 = grad_trial(alpha, n, x_loc, y_loc);
-                    tmp2 = grad_test(beta, n, x_loc, y_loc);
-                    tmp3 = c(x_loc, y_loc) * (tmp1(1)*tmp2(1) + tmp1(2)*tmp2(2));
+                    [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
+                    tmp1 = grad_trial(alpha, n, x, y);
+                    tmp2 = grad_test(beta, n, x, y);
+                    tmp3 = c(x, y) * (tmp1(1)*tmp2(1) + tmp1(2)*tmp2(2));
                     r = r + gq_tri_w(k) * tmp3;
                 end
                 r = r * abs(Jac(n));
@@ -96,13 +96,36 @@ function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
             
             r = 0.0;
             for k = 1:gq_tri_n
-                [x_loc, y_loc] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
-                r = r + gq_tri_w(k) * f(x_loc, y_loc) * test(beta, n, x_loc, y_loc);
+                [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
+                r = r + gq_tri_w(k) * f(x, y) * test(beta, n, x, y);
             end
             r = r * abs(Jac(n));
             b(i) = b(i) + r;
         end
     end
+    
+    % Neumann Boundary
+    v = zeros(Nb, 1);
+    for k = 1:nbe
+        if boundary_edge(1, k) == -2
+            elem = boundary_edge(2, k);
+            node1 = P(:, boundary_edge(3, k));
+            node2 = P(:, boundary_edge(4, k));
+            for beta = 1:Nlb
+                i = T(beta, elem);
+                r = 0.0;
+                for j = 1:gq_lin_n
+                    loc_ratio = (gq_lin_s0(j)+1)/2;
+                    loc_node = (1.0-loc_ratio)*node1 + loc_ratio*node2;
+                    x = loc_node(1); y = loc_node(2);
+                    r = r + gq_lin_w(j) * c(x, y) * p(x, y) * test(beta, elem, x, y);
+                end
+                r = r * norm(node2-node1)/2;
+                v(i) = v(i) + r;
+            end
+        end
+    end
+    b = b + v;
     
     % Dirichlet Boundary
     for k = 1:nbn
@@ -114,32 +137,7 @@ function [h1, h2, errnorm] = solve_2d_elliptic_pde(N1, N2)
         end
     end
     
-    % Neumann Boundary
-    v = zeros(Nb, 1);
-    for k = 1:nbe
-        if boundary_edge(1, k) == -2
-            elem = boundary_edge(2, k);
-            node1 = P(:, boundary_edge(3, k));
-            node2 = P(:, boundary_edge(4, k));
-                 
-            for beta = 1:Nlb
-                i = T(beta, elem);
-                
-                r = 0.0;
-                for j = 1:gq_lin_n
-                    loc_ratio = (gq_lin_s0(j)+1)/2;
-                    loc_node = (1.0-loc_ratio)*node1 + loc_ratio*node2;
-                    x_loc = loc_node(1); y_loc = loc_node(2);
-                    
-                    r = r + c(x_loc, y_loc) * p(x_loc, y_loc) * test(i, elem, x_loc, y_loc) * gq_lin_w(j);
-                end
-                v(i) = v(i) + r;
-            end
-        end
-    end
-    
     % Solve and Check
-    b = b + v;
     u_sol = A\b;
     
     errnorm = zeros(1, 3); %inf, L2, semi-H1 respectively
@@ -350,13 +348,18 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T)
         elem_idx = 1 + (k-1)*n2*2;
         node_idx = edge_idx;
 
-        bdry_edge(1, edge_idx) = -1;
+        bdry_edge(1, edge_idx) = -2;
         bdry_edge(2, edge_idx) = elem_idx;
         bdry_edge(3, edge_idx) = T(1, elem_idx);
         bdry_edge(4, edge_idx) = T(2, elem_idx);
         
-        bdry_node(1, node_idx) = -1;
+        bdry_node(1, node_idx) = -2;
         bdry_node(2, node_idx) = T(1, elem_idx);
+        
+        if k==n1
+            bdry_node(1, node_idx+1) = -2;
+            bdry_node(2, node_idx) = T(2, elem_idx);
+        end
     end
     
     % Right
@@ -402,6 +405,11 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T)
         
         bdry_node(1, node_idx) = -1;
         bdry_node(2, node_idx) = T(3, elem_idx);
+        
+        if k == n2
+            bdry_node(1, 1) = -1;
+            bdry_node(2, 1) = T(1, elem_idx);
+        end
     end
 end
 
