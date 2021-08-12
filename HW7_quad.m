@@ -1,15 +1,15 @@
 clear; close all; clc;
 
-N_CASE = 6;
+N_CASE = 4;
 h = zeros(1, N_CASE);
 err = zeros(3, N_CASE);
 
 for i = 1:N_CASE
     N = 2^i;
     theta = 0.5;
-    fprintf("\nCASE%d: theta=%g, ", i, theta);
-    [ch1, ch2, ce] = solve_2d_parabolic_pde(N, N, theta, 0.0, 1.0);
-    h(i) = sqrt(ch1*ch2);
+    fprintf("\nCASE%d: N=%d, theta=%g, ", i, N, theta);
+    [ch1, ch2, ce] = solve_2d_parabolic_pde(2*N, N, theta, 0.0, 0.1);
+    h(i) = ch2;
     err(1,i) = ce(1);
     err(2,i) = ce(2);
     err(3,i) = ce(3);
@@ -22,7 +22,13 @@ loglog(h, err(2,:), '-s')
 hold on
 loglog(h, err(3,:), '-s')
 grid on
-legend('inf','L2','semi-H1','Location','northwest')
+loglog([1e0, 1e-1], [1e1, 1e0])
+grid on
+loglog([1e0, 1e-1], [1e1, 1e-1])
+grid on
+loglog([1e0, 1e-1], [1e0, 1e-3])
+grid on
+legend('inf', 'L2', 'semi-H1', '1st-order', '2nd-order', '3rd-order', 'Location', 'southeast')
 
 function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_end)
     global P T Pb Tb Jac
@@ -59,13 +65,9 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     gq_tri_y0 = [1.0/3, 1.0/5, 1.0/5, 3.0/5];
     gq_tri_w = [-27.0/96, 25.0/96, 25.0/96, 25.0/96];
     gq_tri_n = 4;
-    
-    gq_lin_s0 = [-sqrt(3/5),0,sqrt(3/5)];
-    gq_lin_w = [5/9, 8/9, 5/9];
-    gq_lin_n = 3;
-    
+
     % Assemble the mass matrix
-    M = zeros(Nb, Nb);
+    M = sparse(Nb, Nb);
     for n = 1:N
         for alpha = 1:Nlb % trial
             for beta = 1:Nlb % test
@@ -86,7 +88,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     end
     
     % Assemble the stiffness matrix
-    A = zeros(Nb, Nb);
+    A = sparse(Nb, Nb);
     for n = 1:N
         for alpha = 1:Nlb % trial
             for beta = 1:Nlb % test
@@ -98,7 +100,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
                     [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_x0(k));
                     tmp1 = grad_trial(alpha, n, x, y);
                     tmp2 = grad_test(beta, n, x, y);
-                    tmp3 = c(x, y) * dot(tmp1, tmp2);
+                    tmp3 = c(x, y, t_start) * dot(tmp1, tmp2);
                     tmp = tmp + gq_tri_w(k) * tmp3;
                 end
                 tmp = tmp * abs(Jac(n));
@@ -139,7 +141,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
 
             b_cur(i) = b_cur(i) + tmp;
         end
-    end 
+    end
     
     % Time-Marching
     t_cur = t_start;
@@ -351,21 +353,16 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T, Tb)
         elem_idx = 1 + (k-1)*n2*2;
         node_idx = 2*edge_idx-1;
 
-        bdry_edge(1, edge_idx) = -3;
+        bdry_edge(1, edge_idx) = -1;
         bdry_edge(2, edge_idx) = elem_idx;
         bdry_edge(3, edge_idx) = T(1, elem_idx);
         bdry_edge(4, edge_idx) = T(2, elem_idx);
         
-        bdry_node(1, node_idx) = -3;
+        bdry_node(1, node_idx) = -1;
         bdry_node(2, node_idx) = Tb(1, elem_idx);
         
-        bdry_node(1, node_idx+1) = -3;
+        bdry_node(1, node_idx+1) = -1;
         bdry_node(2, node_idx+1) = Tb(4, elem_idx);
-        
-        if k==n1
-            bdry_node(1, node_idx+2) = -3;
-            bdry_node(2, node_idx+2) = Tb(2, elem_idx);
-        end
     end
     
     % Right
@@ -420,11 +417,6 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T, Tb)
         
         bdry_node(1, node_idx+1) = -1;
         bdry_node(2, node_idx+1) = Tb(6, elem_idx);
-        
-        if k == n2
-            bdry_node(1, 1) = -1;
-            bdry_node(2, 1) = Tb(1, elem_idx);
-        end
     end
 end
 
