@@ -6,7 +6,7 @@ err = zeros(3, N_CASE);
 
 for i = 1:N_CASE
     N = 2^i;
-    theta = 1.0;
+    theta = 0.5;
     fprintf("\nCASE%d: theta=%g, ", i, theta);
     [ch1, ch2, ce] = solve_2d_parabolic_pde(N, N, theta, 0.0, 1.0);
     h(i) = sqrt(ch1*ch2);
@@ -30,7 +30,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     x_min = 0.0; x_max = 2.0; h1 = (x_max-x_min)/N1;
     y_min = 0.0; y_max = 1.0; h2 = (y_max-y_min)/N2;
     
-    dt = 4 * h1 * h2;
+    dt = sqrt(h1 * h2);
     
     fprintf("h1=%g, h2=%g, dt=%g\n", h1, h2, dt);
         
