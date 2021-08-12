@@ -1,18 +1,19 @@
 clear; close all; clc;
 
-N_CASE = 7;
+N_CASE = 6;
 h = zeros(1, N_CASE);
 err = zeros(3, N_CASE);
 
 for i = 1:N_CASE
     N = 2^i;
-    theta = 0.5;
-    [ch, ~, ce] = solve_2d_parabolic_pde(N, N, theta);
-    h(i) = ch;
+    theta = 1.0;
+    fprintf("\nCASE%d: theta=%g, ", i, theta);
+    [ch1, ch2, ce] = solve_2d_parabolic_pde(N, N, theta, 0.0, 1.0);
+    h(i) = sqrt(ch1*ch2);
     err(1,i) = ce(1);
     err(2,i) = ce(2);
     err(3,i) = ce(3);
-    fprintf("h=1/%d, |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", N, err(1,i), err(2,i), err(3,i));
+    fprintf("\n  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err(1,i), err(2,i), err(3,i));
 end
 
 loglog(h, err(1,:), '-s')
@@ -21,14 +22,18 @@ loglog(h, err(2,:), '-s')
 hold on
 loglog(h, err(3,:), '-s')
 grid on
-legend('inf','L2','H1','Location','northwest')
+legend('inf','L2','semi-H1','Location','northwest')
 
-function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
+function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_end)
     global P T Jac
 
-    x_min = -1.0; x_max = 1.0; h1 = (x_max-x_min)/N1;
-    y_min = -1.0; y_max = 1.0; h2 = (y_max-y_min)/N2;
+    x_min = 0.0; x_max = 2.0; h1 = (x_max-x_min)/N1;
+    y_min = 0.0; y_max = 1.0; h2 = (y_max-y_min)/N2;
     
+    dt = 4 * h1 * h2;
+    
+    fprintf("h1=%g, h2=%g, dt=%g\n", h1, h2, dt);
+        
     [P, T] = mesh_info_mat(x_min,x_max,y_min,y_max,N1,N2);
     [boundary_edge, boundary_node] = boundary_info_mat(N1, N2, T);
     
@@ -52,14 +57,14 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
     end
     
     % Gauss quadrature coefficients
-    gq_tri_x0=[1.0/3, 1.0/5, 3.0/5, 1.0/5];
-    gq_tri_y0=[1.0/3, 1.0/5, 1.0/5, 3.0/5];
-    gq_tri_w=[-27.0/96, 25.0/96, 25.0/96, 25.0/96];
-    gq_tri_n=4;
+    gq_tri_x0 = [1.0/3, 1.0/5, 3.0/5, 1.0/5];
+    gq_tri_y0 = [1.0/3, 1.0/5, 1.0/5, 3.0/5];
+    gq_tri_w = [-27.0/96, 25.0/96, 25.0/96, 25.0/96];
+    gq_tri_n = 4;
     
-    gq_lin_s0=[-sqrt(3/5),0,sqrt(3/5)];
-    gq_lin_w=[5/9, 8/9, 5/9];
-    gq_lin_n=3;
+    gq_lin_s0 = [-sqrt(3/5),0,sqrt(3/5)];
+    gq_lin_w = [5/9, 8/9, 5/9];
+    gq_lin_n = 3;
     
     % Assemble the mass matrix
     M = zeros(Nb, Nb);
@@ -71,7 +76,8 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
                 
                 tmp = 0.0;
                 for k = 1:gq_tri_n
-                    x0 = gq_tri_x0(k); y0 = gq_tri_y0(k);
+                    x0 = gq_tri_x0(k); 
+                    y0 = gq_tri_y0(k);
                     tmp = tmp + gq_tri_w(k) * trial_ref(alpha, x0, y0) * test_ref(beta, x0, y0);
                 end
                 tmp = tmp * abs(Jac(n));
@@ -94,8 +100,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
                     [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
                     tmp1 = grad_trial(alpha, n, x, y);
                     tmp2 = grad_test(beta, n, x, y);
-                    tmp3 = c(x, y) * (tmp1(1)*tmp2(1) + tmp1(2)*tmp2(2));
-                    tmp = tmp + gq_tri_w(k) * tmp3;
+                    tmp = tmp + gq_tri_w(k) * c(x, y) * dot(tmp1, tmp2);
                 end
                 tmp = tmp * abs(Jac(n));
                 
@@ -104,79 +109,98 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
         end
     end
     
-    % Assemble the load vector
-    b = zeros(Nb, 1);
-    for n = 1:N
-        for beta = 1:Nlb
-            i = T(beta, n);
-            
-            tmp = 0.0;
-            for k = 1:gq_tri_n
-                [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
-                tmp = tmp + gq_tri_w(k) * f(x, y) * test(beta, n, x, y);
-            end
-            tmp = tmp * abs(Jac(n));
-            
-            b(i) = b(i) + tmp;
-        end
-    end
-    
-    % Robin Boundary
-    for k = 1:nbe
-        if boundary_edge(1, k) == -3
-            elem = boundary_edge(2, k);
-            node1 = P(:, boundary_edge(3, k));
-            node2 = P(:, boundary_edge(4, k));
-            edge_len = norm(node2-node1);
-            
-            for beta = 1:Nlb
-                i = T(beta, elem);
-                
-                tmp = 0.0;
-                for j = 1:gq_lin_n
-                    loc_ratio = (gq_lin_s0(j)+1)/2;
-                    loc_node = (1.0-loc_ratio)*node1 + loc_ratio*node2;
-                    x = loc_node(1); y = loc_node(2);
-                    tmp = tmp + gq_lin_w(j) * c(x, y) * q(x, y) * test(beta, elem, x, y);
-                end
-                tmp = tmp * edge_len/2;
-                
-                b(i) = b(i) + tmp;
-            end
-            
-            for alpha = 1:Nlb % trial
-                for beta = 1:Nlb % test
-                    i = T(beta, elem);
-                    j = T(alpha, elem);
-                    
-                    tmp = 0.0;
-                    for l = 1:gq_lin_n
-                        loc_ratio = (gq_lin_s0(l)+1)/2;
-                        loc_node = (1.0-loc_ratio)*node1 + loc_ratio*node2;
-                        x = loc_node(1); y = loc_node(2);
-                        tmp = tmp + gq_lin_w(l) * c(x, y) * r(x, y) * trial(alpha, elem, x, y) * test(beta, elem, x, y);
-                    end
-                    tmp = tmp * edge_len/2;
-                    
-                    A(i, j) = A(i, j) + tmp;
-                end
-            end
-        end
-    end
-    
+    % In this case, the stiffness matrix does NOT change with time.
+    A_tilde = M / dt + theta * A;
+    A_res = M / dt - (1.0-theta) * A;
     % Dirichlet Boundary
     for k = 1:nbn
         if boundary_node(1, k) == -1
             i = boundary_node(2, k);
-            A(i, :) = 0;
-            A(i, i) = 1;
-            b(i) = u(P(1, i), P(2, i));
+            A_tilde(i, :) = 0;
+            A_tilde(i, i) = 1;
         end
     end
     
-    % Solve and Check
-    u_sol = A\b;
+    % Initialize
+    u_sol = zeros(Nb, 1);
+    for k = 1:Nb
+        u_sol(k) = u(P(1, k), P(2, k), t_start);
+    end
+    b_cur = zeros(Nb, 1);
+    for n = 1:N
+        for beta = 1:Nlb
+            i = T(beta, n);
+
+            tmp = 0.0;
+            for k = 1:gq_tri_n
+                [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
+                tmp = tmp + gq_tri_w(k) * f(x, y, t_start) * test(beta, n, x, y);
+            end
+            tmp = tmp * abs(Jac(n));
+
+            b_cur(i) = b_cur(i) + tmp;
+        end
+    end
     
+    % Time-Marching
+    t_cur = t_start;
+    cnt = 0;
+    while t_cur < t_end
+        % To arrive at prescribed ending time exactly.
+        t_remain = t_end - t_cur;
+        if t_remain < dt
+            dt = t_remain;
+            A_tilde = M/dt + theta*A;
+            A_res = M/dt - (1.0-theta)*A;
+            % Dirichlet Boundary
+            for k = 1:nbn
+                if boundary_node(1, k) == -1
+                    i = boundary_node(2, k);
+                    A_tilde(i, :) = 0;
+                    A_tilde(i, i) = 1;
+                end
+            end
+        end
+        t_next = t_cur + dt;
+        cnt = cnt + 1;
+        fprintf("  iter%4d: t_cur=%10g, t_next=%10g\n", cnt, t_cur, t_next);
+
+        % Assemble the load vector
+        b_next = zeros(Nb, 1);
+        for n = 1:N
+            for beta = 1:Nlb
+                i = T(beta, n);
+
+                tmp = 0.0;
+                for k = 1:gq_tri_n
+                    [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
+                    tmp = tmp + gq_tri_w(k) * f(x, y, t_next) * test(beta, n, x, y);
+                end
+                tmp = tmp * abs(Jac(n));
+
+                b_next(i) = b_next(i) + tmp;
+            end
+        end
+        
+        b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res*u_sol; 
+        
+        % Dirichlet Boundary
+        for k = 1:nbn
+            if boundary_node(1, k) == -1
+                i = boundary_node(2, k);
+                b_tilde(i) = u(P(1, i), P(2, i), t_next);
+            end
+        end
+        
+        % Solve
+        u_sol = A_tilde\b_tilde;
+        
+        % Update
+        t_cur = t_next;
+        b_cur = b_next;
+    end
+
+    % Check
     errnorm = zeros(1, 3); %inf, L2, semi-H1 respectively
     for n = 1:N
         for k = 1:gq_tri_n
@@ -190,7 +214,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
                 w = w + u_sol(T(i, n)) * trial_ref(i, x0, y0);
             end
             
-            err = abs(w - u(x, y));
+            err = abs(w - u(x, y, t_end));
             if err > errnorm(1)
                 errnorm(1) = err;
             end
@@ -210,7 +234,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
                 w = w + u_sol(T(i, n)) * trial_ref(i, x0, y0);
             end
             
-            err = (w - u(x, y))^2;
+            err = (w - u(x, y, t_end))^2;
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
@@ -231,7 +255,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta)
                 w = w + u_sol(T(i, n)) * grad_trial(i, n, x, y);
             end
             
-            err = norm(w - grad_u(x, y))^2;
+            err = norm(w - grad_u(x, y, t_end))^2;
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
@@ -385,18 +409,13 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T)
         elem_idx = 1 + (k-1)*n2*2;
         node_idx = edge_idx;
 
-        bdry_edge(1, edge_idx) = -3;
+        bdry_edge(1, edge_idx) = -1;
         bdry_edge(2, edge_idx) = elem_idx;
         bdry_edge(3, edge_idx) = T(1, elem_idx);
         bdry_edge(4, edge_idx) = T(2, elem_idx);
         
-        bdry_node(1, node_idx) = -3;
+        bdry_node(1, node_idx) = -1;
         bdry_node(2, node_idx) = T(1, elem_idx);
-        
-        if k==n1
-            bdry_node(1, node_idx+1) = -3;
-            bdry_node(2, node_idx+1) = T(2, elem_idx);
-        end
     end
     
     % Right
@@ -442,36 +461,23 @@ function [bdry_edge, bdry_node] = boundary_info_mat(n1, n2, T)
         
         bdry_node(1, node_idx) = -1;
         bdry_node(2, node_idx) = T(3, elem_idx);
-        
-        if k == n2
-            bdry_node(1, 1) = -1;
-            bdry_node(2, 1) = T(1, elem_idx);
-        end
     end
 end
 
-function [ret] = c(x, y)
-    ret = 1.0;
+function [ret] = c(x, y, t)
+    ret = 2.0;
 end
 
-function [ret] = f(x, y)
-    ret = -2*exp(x+y);
+function [ret] = f(x, y, t)
+    ret = -3.0*exp(x+y+t);
 end
 
-function [ret] = u(x, y)
-    ret = exp(x+y);
+function [ret] = u(x, y, t)
+    ret = exp(x+y+t);
 end
 
-function [ret] = grad_u(x, y)
-    gx = exp(x+y);
-    gy = exp(x+y);
+function [ret] = grad_u(x, y, t)
+    gx = exp(x+y+t);
+    gy = exp(x+y+t);
     ret = [gx; gy];
-end
-
-function [ret] = r(x, y)
-    ret = 1.0;
-end
-
-function [ret] = q(x, y)
-    ret = 0.0;
 end
