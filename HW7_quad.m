@@ -1,18 +1,35 @@
 clear; close all; clc;
 
-N_CASE = 4;
+N_CASE = 5;
 h = zeros(1, N_CASE);
 err = zeros(3, N_CASE);
 
 for i = 1:N_CASE
     N = 2^i;
-    theta = 0.5;
-    fprintf("\nCASE%d: N=%d, theta=%g, ", i, N, theta);
-    [ch1, ch2, ce] = solve_2d_parabolic_pde(2*N, N, theta, 0.0, 0.1);
-    h(i) = ch2;
-    err(1,i) = ce(1);
-    err(2,i) = ce(2);
-    err(3,i) = ce(3);
+    h(i) = 1.0/N;
+    
+    xMin = 0.0; 
+    xMax = 2.0; 
+    yMin = 0.0; 
+    yMax = 1.0; 
+    
+    N1 = round((xMax-xMin)/h(i));
+    N2 = round((yMax-yMin)/h(i));
+    h1 = (xMax-xMin)/N1;
+    h2 = (yMax-yMin)/N2;
+    
+    t0 = 0.0;
+    t1 = 1.0;
+    
+    theta = 1.0;
+    dt0 = 8.0*power(h(i), 3.0);
+    loop_cnt = ceil((t1 - t0)/dt0);
+    dt = (t1 - t0)/loop_cnt;    
+    
+    fprintf("\nCASE%d: h=1/%d, hx=%g, hy=%g, dt=%g, theta=%g\n", i, N, h1, h2, dt, theta);
+    
+    err(:, i) = solve_2d_parabolic_pde(xMin, xMax, yMin, yMax, N1, N2, t0, t1, loop_cnt, theta);
+
     fprintf("\n  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err(1,i), err(2,i), err(3,i));
 end
 
@@ -22,6 +39,7 @@ loglog(h, err(2,:), '-s')
 hold on
 loglog(h, err(3,:), '-s')
 grid on
+% legend('inf', 'L2', 'semi-H1', 'Location', 'southeast')
 loglog([1e0, 1e-1], [1e1, 1e0])
 grid on
 loglog([1e0, 1e-1], [1e1, 1e-1])
@@ -30,15 +48,10 @@ loglog([1e0, 1e-1], [1e0, 1e-3])
 grid on
 legend('inf', 'L2', 'semi-H1', '1st-order', '2nd-order', '3rd-order', 'Location', 'southeast')
 
-function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_end)
+function [errnorm] = solve_2d_parabolic_pde(x_min, x_max, y_min, y_max, N1, N2, t_start, t_end, n_iter, theta)
     global P T Pb Tb Jac
     
-    x_min = 0.0; x_max = 2.0; h1 = (x_max-x_min)/N1;
-    y_min = 0.0; y_max = 1.0; h2 = (y_max-y_min)/N2;
-    
-    dt = power(sqrt(h1 * h2), 1.5);
-    
-    fprintf("h1=%g, h2=%g, dt=%g\n", h1, h2, dt);
+    dt = (t_end - t_start) / n_iter;
     
     [P, T] = mesh_info_mat(x_min,x_max,y_min,y_max,N1,N2);
     [Pb, Tb] = fem_info_mat(x_min,x_max,y_min,y_max,N1,N2);
@@ -60,19 +73,28 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
         Jac(i) = calc_elem_jacobi(p1, p2, p3);
     end
     
-    % Gauss quadrature coefficients
+    % Gauss quadrature coordinates & coefficients
+    gq_tri_n = 4;
     gq_tri_x0 = [1.0/3, 1.0/5, 3.0/5, 1.0/5];
     gq_tri_y0 = [1.0/3, 1.0/5, 1.0/5, 3.0/5];
     gq_tri_w = [-27.0/96, 25.0/96, 25.0/96, 25.0/96];
-    gq_tri_n = 4;
+    gq_tri_x = zeros(N, gq_tri_n);
+    gq_tri_y = zeros(N, gq_tri_n);
+    for n = 1:N
+        for k = 1:gq_tri_n
+            x0 = gq_tri_x0(k); 
+            y0 = gq_tri_y0(k);
+            [gq_tri_x(n, k), gq_tri_y(n, k)] = affine_mapping_back(n, x0, y0);
+        end
+    end
 
     % Assemble the mass matrix
     M = sparse(Nb, Nb);
     for n = 1:N
         for alpha = 1:Nlb % trial
+            j = Tb(alpha, n);
             for beta = 1:Nlb % test
                 i = Tb(beta, n);
-                j = Tb(alpha, n);
                 
                 tmp = 0.0;
                 for k = 1:gq_tri_n
@@ -91,13 +113,14 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     A = sparse(Nb, Nb);
     for n = 1:N
         for alpha = 1:Nlb % trial
+            j = Tb(alpha, n);
             for beta = 1:Nlb % test
                 i = Tb(beta, n);
-                j = Tb(alpha, n);
                 
                 tmp = 0.0;
                 for k = 1:gq_tri_n
-                    [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_x0(k));
+                    x = gq_tri_x(n, k);
+                    y = gq_tri_y(n, k);                    
                     tmp1 = grad_trial(alpha, n, x, y);
                     tmp2 = grad_test(beta, n, x, y);
                     tmp3 = c(x, y, t_start) * dot(tmp1, tmp2);
@@ -127,6 +150,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     for k = 1:Nb
         u_sol(k) = u(Pb(1, k), Pb(2, k), t_start);
     end
+    
     b_cur = zeros(Nb, 1);
     for n = 1:N
         for beta = 1:Nlb
@@ -134,8 +158,11 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
 
             tmp = 0.0;
             for k = 1:gq_tri_n
-                [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
-                tmp = tmp + gq_tri_w(k) * f(x, y, t_start) * test(beta, n, x, y);
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k);  
+                tmp = tmp + gq_tri_w(k) * f(x, y, t_start) * test_ref(beta, x0, y0);
             end
             tmp = tmp * abs(Jac(n));
 
@@ -146,22 +173,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     % Time-Marching
     t_cur = t_start;
     cnt = 0;
-    while t_cur < t_end
-        % To arrive at prescribed ending time exactly.
-        t_remain = t_end - t_cur;
-        if t_remain < dt
-            dt = t_remain;
-            A_tilde = M/dt + theta*A;
-            A_res = M/dt - (1.0-theta)*A;
-            % Dirichlet Boundary
-            for k = 1:nbn
-                if boundary_node(1, k) == -1
-                    i = boundary_node(2, k);
-                    A_tilde(i, :) = 0;
-                    A_tilde(i, i) = 1.0;
-                end
-            end
-        end
+    while cnt < n_iter
         t_next = t_cur + dt;
         cnt = cnt + 1;
         fprintf("  iter%4d: t_cur=%10g, t_next=%10g\n", cnt, t_cur, t_next);
@@ -174,8 +186,11 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
 
                 tmp = 0.0;
                 for k = 1:gq_tri_n
-                    [x, y] = affine_mapping_back(n, gq_tri_x0(k), gq_tri_y0(k));
-                    tmp = tmp + gq_tri_w(k) * f(x, y, t_next) * test(beta, n, x, y);
+                    x0 = gq_tri_x0(k);
+                    y0 = gq_tri_y0(k);
+                    x = gq_tri_x(n, k);
+                    y = gq_tri_y(n, k);  
+                    tmp = tmp + gq_tri_w(k) * f(x, y, t_next) * test_ref(beta, x0, y0);
                 end
                 tmp = tmp * abs(Jac(n));
 
@@ -183,7 +198,7 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
             end
         end
         
-        b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res*u_sol; 
+        b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res * u_sol; 
         
         % Dirichlet Boundary
         for k = 1:nbn
@@ -207,8 +222,8 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
             y0 = gq_tri_y0(k);
-            
-            [x, y] = affine_mapping_back(n, x0, y0);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k);  
             
             w = 0.0;
             for i = 1:Nlb
@@ -227,8 +242,8 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
             y0 = gq_tri_y0(k);
-            
-            [x, y] = affine_mapping_back(n, x0, y0);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k);  
             
             w = 0.0;
             for i = 1:Nlb
@@ -246,10 +261,8 @@ function [h1, h2, errnorm] = solve_2d_parabolic_pde(N1, N2, theta, t_start, t_en
     for n = 1:N
         res = 0.0;
         for k = 1:gq_tri_n
-            x0 = gq_tri_x0(k);
-            y0 = gq_tri_y0(k);
-            
-            [x, y] = affine_mapping_back(n, x0, y0);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k);  
             
             w = zeros(2, 1);
             for i = 1:Nlb
