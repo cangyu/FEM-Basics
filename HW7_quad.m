@@ -1,6 +1,6 @@
 clear; close all; clc;
 
-N_CASE = 5;
+N_CASE = 6;
 h = zeros(1, N_CASE);
 err = zeros(3, N_CASE);
 
@@ -21,8 +21,8 @@ for i = 1:N_CASE
     t0 = 0.0;
     t1 = 1.0;
     
-    theta = 1.0;
-    dt0 = 8.0*power(h(i), 3.0);
+    theta = 0.5;
+    dt0 = power(h(i), 1.5);
     loop_cnt = ceil((t1 - t0)/dt0);
     dt = (t1 - t0)/loop_cnt;    
     
@@ -40,11 +40,11 @@ hold on
 loglog(h, err(3,:), '-s')
 grid on
 % legend('inf', 'L2', 'semi-H1', 'Location', 'southeast')
-loglog([1e0, 1e-1], [1e1, 1e0])
+loglog([1e0, 1e-2], [1e0, 1e-2])
 grid on
-loglog([1e0, 1e-1], [1e1, 1e-1])
+loglog([1e0, 1e-2], [1e0, 1e-4])
 grid on
-loglog([1e0, 1e-1], [1e0, 1e-3])
+loglog([1e0, 1e-2], [1e-1, 1e-7])
 grid on
 legend('inf', 'L2', 'semi-H1', '1st-order', '2nd-order', '3rd-order', 'Location', 'southeast')
 
