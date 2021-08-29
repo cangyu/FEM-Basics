@@ -46,8 +46,7 @@ function [errnorm] = solve_2d_steady_linear_elasticity(x_min, x_max, y_min, y_ma
     mu = 2.0;
     
     [P, T] = mesh_info_mat(x_min,x_max,y_min,y_max,N1,N2);
-    Pb = P;
-    Tb = T;
+    Pb = P; Tb = T;
     [boundary_edge, boundary_node] = boundary_info_mat(N1, N2, T);
     
     Nlb = size(Tb, 1); % Num of local basis functions
@@ -81,11 +80,162 @@ function [errnorm] = solve_2d_steady_linear_elasticity(x_min, x_max, y_min, y_ma
     end
     
     % Assemble the stiffness matrix
-    A = sparse(2*Nb, 2*Nb);
+    A1 = zeros(Nb, Nb);
+    A2 = zeros(Nb, Nb);
+    A3 = zeros(Nb, Nb);
+    A4 = zeros(Nb, Nb);
+    A5 = zeros(Nb, Nb);
+    A6 = zeros(Nb, Nb);
+    A7 = zeros(Nb, Nb);
+    A8 = zeros(Nb, Nb);
+    for n = 1:N
+        for alpha = 1:Nlb % trial
+            j = Tb(alpha, n);
+            for beta = 1:Nlb % test
+                i = Tb(beta, n);
+                
+                tmp = zeros(8, 1);
+                for k = 1:gq_tri_n
+                    x = gq_tri_x(n, k);
+                    y = gq_tri_y(n, k);                    
+                    
+                    gpj = grad_trial(alpha, n, x, y);
+                    gpi = grad_test(beta, n, x, y);
+                    
+                    tmp(1) = tmp(1) + gq_tri_w(k) * lambda * gpj(1) * gpi(1);
+                    tmp(2) = tmp(2) + gq_tri_w(k) * mu     * gpj(1) * gpi(1);
+                    tmp(3) = tmp(3) + gq_tri_w(k) * mu     * gpj(2) * gpi(2);
+                    tmp(4) = tmp(4) + gq_tri_w(k) * lambda * gpj(2) * gpi(1);
+                    tmp(5) = tmp(5) + gq_tri_w(k) * mu     * gpj(1) * gpi(2);
+                    tmp(6) = tmp(6) + gq_tri_w(k) * lambda * gpj(1) * gpi(2);
+                    tmp(7) = tmp(7) + gq_tri_w(k) * mu     * gpj(2) * gpi(1);
+                    tmp(8) = tmp(8) + gq_tri_w(k) * lambda * gpj(2) * gpi(2);
+                end
+                tmp = tmp * abs(Jac(n));
+                
+                A1(i, j) = A1(i, j) + tmp(1);
+                A2(i, j) = A2(i, j) + tmp(2);
+                A3(i, j) = A3(i, j) + tmp(3);
+                A4(i, j) = A4(i, j) + tmp(4);
+                A5(i, j) = A5(i, j) + tmp(5);
+                A6(i, j) = A6(i, j) + tmp(6);
+                A7(i, j) = A7(i, j) + tmp(7);
+                A8(i, j) = A8(i, j) + tmp(8);
+            end
+        end
+    end
+    A = [A1+2*A2+A3, A4+A5; A6+A7, A8+2*A3+A2];
     
+    % Assemble the load vector
+    b1 = zeros(Nb, 1);
+    b2 = zeros(Nb, 1);
+    for n = 1:N
+        for beta = 1:Nlb % test
+            i = Tb(beta, n);
+            
+            tmp = zeros(2, 1);
+            for k = 1:gq_tri_n
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k);  
+                
+                fval = f(x, y);
+                
+                tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * test_ref(beta, x0, y0);
+                tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * test_ref(beta, x0, y0);
+            end
+            tmp = tmp * abs(Jac(n));
+            
+            b1(i) = b1(i) + tmp(1);
+            b2(i) = b2(i) + tmp(2);
+        end
+    end
+    b = [b1; b2];
     
+    % Dirichlet Boundary
+    for k = 1:nbn
+        if boundary_node(1, k) == -1
+            i = boundary_node(2, k);
+            g = u(Pb(1, i), Pb(2, i));
+
+            A(i, :) = 0;
+            A(i, i) = 1;
+            b(i) = g(1);
+            
+            A(Nb + i, :) = 0;
+            A(Nb + i, Nb + i) = 1;
+            b(Nb + i) = g(2);
+        end
+    end
     
+    % Solve and Check
+    x = A\b;
+    u_sol = zeros(2, Nb);
+    for i = 1:Nb
+        u_sol(1, i) = x(i);
+        u_sol(2, i) = x(Nb+i);
+    end
     
+    errnorm = zeros(1, 3); %inf, L2, semi-H1 respectively
+    for n = 1:N
+        for k = 1:gq_tri_n
+            x0 = gq_tri_x0(k);
+            y0 = gq_tri_y0(k);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k);  
+            
+            w = zeros(2, 1);
+            for i = 1:Nlb
+                w = w + u_sol(:, Tb(i, n)) * trial_ref(i, x0, y0);
+            end
+            
+            err = norm(w - u(x, y), Inf);
+            if err > errnorm(1)
+                errnorm(1) = err;
+            end
+        end
+    end
+    
+    for n = 1:N
+        res = 0.0;
+        for k = 1:gq_tri_n
+            x0 = gq_tri_x0(k);
+            y0 = gq_tri_y0(k);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k);  
+            
+            w = zeros(2, 1);
+            for i = 1:Nlb
+                w = w + u_sol(:, Tb(i, n)) * trial_ref(i, x0, y0);
+            end
+            
+            err = norm(w - u(x, y))^2;
+            res = res + gq_tri_w(k) * err;
+        end
+        res = res * abs(Jac(n));
+        errnorm(2) = errnorm(2) + res;
+    end
+    errnorm(2) = sqrt(errnorm(2));
+    
+    for n = 1:N
+        res = 0.0;
+        for k = 1:gq_tri_n
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k);  
+            
+            w = zeros(2, 2);
+            for i = 1:Nlb
+                w = w + u_sol(:, Tb(i, n)) * grad_trial(i, n, x, y).';
+            end
+            
+            err = norm(w - grad_u(x, y), 'fro')^2;
+            res = res + gq_tri_w(k) * err;
+        end
+        res = res * abs(Jac(n));
+        errnorm(3) = errnorm(3) + res;
+    end
+    errnorm(3) = sqrt(errnorm(3));
 end
 
 function [P, T] = mesh_info_mat(xmin, xmax, ymin, ymax, n1, n2)
