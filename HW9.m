@@ -2,7 +2,8 @@ clear; close all; clc;
 
 N_CASE = 6;
 h = zeros(1, N_CASE);
-err = zeros(3, N_CASE);
+err_velocity = zeros(3, N_CASE);
+err_pressure = zeros(3, N_CASE);
 
 for i = 1:N_CASE
     N = 2^i;
@@ -18,29 +19,37 @@ for i = 1:N_CASE
     
     fprintf("\nCASE%d: h=1/%d\n", i, N);
     
-    err(:, i) = solve_2d_steady_stokes(xMin, xMax, yMin, yMax, N1, N2);
+    [err_velocity(:, i), err_pressure(:, i)] = solve_2d_steady_stokes(xMin, xMax, yMin, yMax, N1, N2);
 
-    fprintf("\n  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err(1,i), err(2,i), err(3,i));
+    fprintf("\n  Velocity:  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err_velocity(1,i), err_velocity(2,i), err_velocity(3,i));
+    fprintf("\n  Pressure:  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err_pressure(1,i), err_pressure(2,i), err_pressure(3,i));
 end
 
-loglog(h, err(1,:), '-s')
+loglog(h, err_velocity(1,:), '-s')
 hold on
-loglog(h, err(2,:), '-s')
+loglog(h, err_velocity(2,:), '-s')
 hold on
-loglog(h, err(3,:), '-s')
+loglog(h, err_velocity(3,:), '-s')
 grid on
-% legend('inf', 'L2', 'semi-H1', 'Location', 'southeast')
-loglog([1e0, 1e-2], [1e0, 1e-2])
+
+loglog(h, err_pressure(1,:), '-+')
+hold on
+loglog(h, err_pressure(2,:), '-+')
+hold on
+loglog(h, err_pressure(3,:), '-+')
+grid on
+
+loglog([1e0, 1e-2], [1e1, 1e-1])
 grid on
 loglog([1e0, 1e-2], [1e0, 1e-4])
 grid on
 loglog([1e0, 1e-2], [1e-1, 1e-7])
 grid on
-legend('inf', 'L2', 'semi-H1', '1st-order', '2nd-order', '3rd-order', 'Location', 'southeast')
+legend('Velocity Inf', 'Velocity L2', 'Velocity H1-semi', 'Pressure Inf', 'Pressure L2', 'Pressure H1-semi', '1st-order slope', '2nd-order slope', '3rd-order slope', 'Location', 'southeast')
 
 %% Coefficient assembly
 
-function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
+function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
     global P T Pb Tb Jac
     global mu
     
@@ -118,19 +127,20 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
     A6 = sparse(Nb_velocity, Nb_pressure);
     for n = 1:N
         for alpha = 1:Nlb_pressure % trial
-            j = Tb(alpha, n);
+            j = T(alpha, n);
             for beta = 1:Nlb_velocity % test
                 i = Tb(beta, n);
                 
-                tmp5 = 0.0, tmp6 = 0.0;
+                tmp5 = 0.0;
+                tmp6 = 0.0;
                 for k = 1:gq_tri_n
                     x0 = gq_tri_x0(k);
                     y0 = gq_tri_y0(k);
                     x = gq_tri_x(n, k);
                     y = gq_tri_y(n, k);
                     
-                    psij = pressure_trial_ref(x0, y0);
-                    gphii = grad_velocity_test(n, x, y);
+                    psij = pressure_trial_ref(alpha, x0, y0);
+                    gphii = grad_velocity_test(beta, n, x, y);
                     
                     tmp5 = tmp5 + gq_tri_w(k) * -psij * gphii(1);
                     tmp6 = tmp6 + gq_tri_w(k) * -psij * gphii(2);
@@ -162,9 +172,10 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
                 y = gq_tri_y(n, k);  
                 
                 fval = f(x, y);
+                phii = velocity_test_ref(beta, x0, y0);
                 
-                tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * velocity_test_ref(beta, x0, y0);
-                tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * velocity_test_ref(beta, x0, y0);
+                tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
+                tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * phii;
             end
             tmp = tmp * abs(Jac(n));
             
@@ -174,7 +185,7 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
     end
     b = [b1; b2; bO];
     
-    % Dirichlet Boundary
+    % Dirichlet Boundary for velocity
     for k = 1:nbn
         if boundary_node(1, k) == -1
             i = boundary_node(2, k);
@@ -190,15 +201,48 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
         end
     end
     
+    % Dirichlet Boundary for pressure
+    node_flag = false(1, Nb_pressure);
+    for k = 1:nbe
+        if boundary_edge(1, k) == -1
+            n_end1 = boundary_edge(3, k);
+            n_end2 = boundary_edge(4, k);
+            
+            if(node_flag(n_end1) == false)
+                node_flag(n_end1) = true;
+                i = n_end1;
+                
+                g = p(P(1, i), P(2, i));
+                A(2*Nb_velocity+i, :) = 0;
+                A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                b(2*Nb_velocity+i) = p(P(1, i), P(2, i));
+            end
+            
+            if(node_flag(n_end2) == false)
+                node_flag(n_end2) = true;
+                i = n_end1;
+                
+                g = p(P(1, i), P(2, i));
+                A(2*Nb_velocity+i, :) = 0;
+                A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                b(2*Nb_velocity+i) = p(P(1, i), P(2, i));
+            end
+        end
+    end
+    
     % Solve and Check
     x = A\b;
     u_sol = zeros(2, Nb_velocity);
+    p_sol = zeros(1, Nb_pressure);
     for i = 1:Nb_velocity
         u_sol(1, i) = x(i);
         u_sol(2, i) = x(Nb_velocity+i);
     end
+    for i = 1:Nb_pressure
+        p_sol(i) = x(2*Nb_velocity+i);
+    end
     
-    errnorm = zeros(1, 3); %inf, L2, semi-H1 respectively
+    errnorm_velocity = zeros(1, 3); %inf, L2, semi-H1 respectively
     for n = 1:N
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
@@ -212,8 +256,8 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
             end
             
             err = norm(w - u(x, y), Inf);
-            if err > errnorm(1)
-                errnorm(1) = err;
+            if err > errnorm_velocity(1)
+                errnorm_velocity(1) = err;
             end
         end
     end
@@ -235,9 +279,9 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
-        errnorm(2) = errnorm(2) + res;
+        errnorm_velocity(2) = errnorm_velocity(2) + res;
     end
-    errnorm(2) = sqrt(errnorm(2));
+    errnorm_velocity(2) = sqrt(errnorm_velocity(2));
     
     for n = 1:N
         res = 0.0;
@@ -254,9 +298,71 @@ function [errnorm] = solve_2d_steady_stokes(x_min, x_max, y_min, y_max, N1, N2)
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
-        errnorm(3) = errnorm(3) + res;
+        errnorm_velocity(3) = errnorm_velocity(3) + res;
     end
-    errnorm(3) = sqrt(errnorm(3));
+    errnorm_velocity(3) = sqrt(errnorm_velocity(3));
+    
+    errnorm_pressure = zeros(1, 3); %inf, L2, semi-H1 respectively
+    for n = 1:N
+        for k = 1:gq_tri_n
+            x0 = gq_tri_x0(k);
+            y0 = gq_tri_y0(k);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k); 
+                        
+            w = 0.0;
+            for i = 1:Nlb_pressure
+                w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
+            end
+            
+            err = abs(w - p(x, y));
+            if err > errnorm_pressure(1)
+                errnorm_pressure(1) = err;
+            end
+        end
+    end
+    
+    for n = 1:N
+        res = 0.0;
+        for k = 1:gq_tri_n
+            x0 = gq_tri_x0(k);
+            y0 = gq_tri_y0(k);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k); 
+                        
+            w = 0.0;
+            for i = 1:Nlb_pressure
+                w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
+            end
+            
+            err = (w - p(x, y))^2;
+            res = res + gq_tri_w(k) * err;
+        end
+        res = res * abs(Jac(n));
+        errnorm_pressure(2) = errnorm_pressure(2) + res;
+    end
+    errnorm_pressure(2) = sqrt(errnorm_pressure(2));
+    
+    for n = 1:N
+        res = 0.0;
+        for k = 1:gq_tri_n
+            x0 = gq_tri_x0(k);
+            y0 = gq_tri_y0(k);
+            x = gq_tri_x(n, k);
+            y = gq_tri_y(n, k); 
+                        
+            w = zeros(2, 1);
+            for i = 1:Nlb_pressure
+                w = w + p_sol(T(i, n)) * grad_pressure_trial(i, n, x, y);
+            end
+            
+            err = norm(w - grad_p(x, y))^2;
+            res = res + gq_tri_w(k) * err;
+        end
+        res = res * abs(Jac(n));
+        errnorm_pressure(3) = errnorm_pressure(3) + res;
+    end
+    errnorm_pressure(3) = sqrt(errnorm_pressure(3));
 end
 
 %% Mesh generation
