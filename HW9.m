@@ -215,7 +215,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_stokes(x_min, x_
                 g = p(P(1, i), P(2, i));
                 A(2*Nb_velocity+i, :) = 0;
                 A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                b(2*Nb_velocity+i) = p(P(1, i), P(2, i));
+                b(2*Nb_velocity+i) = g;
             end
             
             if(node_flag(n_end2) == false)
@@ -225,7 +225,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_stokes(x_min, x_
                 g = p(P(1, i), P(2, i));
                 A(2*Nb_velocity+i, :) = 0;
                 A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                b(2*Nb_velocity+i) = p(P(1, i), P(2, i));
+                b(2*Nb_velocity+i) = g;
             end
         end
     end
@@ -346,8 +346,6 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_stokes(x_min, x_
     for n = 1:N
         res = 0.0;
         for k = 1:gq_tri_n
-            x0 = gq_tri_x0(k);
-            y0 = gq_tri_y0(k);
             x = gq_tri_x(n, k);
             y = gq_tri_y(n, k); 
                         
