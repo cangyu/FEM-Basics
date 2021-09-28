@@ -189,23 +189,50 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
     u_sol = zeros(2, Nb_velocity);
     p_sol = zeros(1, Nb_pressure);
     
+    % I.C. of u
+    for k = 1:nbn
+        if boundary_node(1, k) == -1
+            i = boundary_node(2, k);
+            u_sol(:, i) = u(Pb(1, i), Pb(2, i));
+        end
+    end
+    
     converged=false;
     newton_iter = 0;
     while ~converged
         newton_iter=newton_iter+1;
         
+        % gradient of velocity at previous iteration
+        U = zeros(N, gq_tri_n, 2);
+        grad_U = zeros(N, gq_tri_n, 2, 2);
+        for n = 1:N
+            for k = 1:gq_tri_n
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k);
+                
+                for alpha = 1:Nlb_velocity
+                    j = Tb(alpha, n);
+                    
+                    phij = velocity_trial_ref(alpha, x0, y0);
+                    gp = grad_velocity_trial(n, alpha, x, y);
+                    
+                    U(n, k, :) = U(n, k, :) + u_sol(:, j) * phij;
+
+                    grad_U(n, k, 1, :) = grad_U(n, k, 1, :) + u_sol(1, j) * gp;
+                    grad_U(n, k, 2, :) = grad_U(n, k, 2, :) + u_sol(2, j) * gp;
+                end
+            end
+        end
+        
+        % coefficients contributed by the convection term
         AN1 = sparse(Nb_velocity, Nb_velocity);
         AN2 = sparse(Nb_velocity, Nb_velocity);
         AN3 = sparse(Nb_velocity, Nb_velocity);
         AN4 = sparse(Nb_velocity, Nb_velocity);
         AN5 = sparse(Nb_velocity, Nb_velocity);
         AN6 = sparse(Nb_velocity, Nb_velocity);
-        
-        % gradient of velocity at previous iteration
-        
-        
-        
-        % coefficients contributed by the convection term
         for n = 1:N
             for alpha = 1:Nlb_velocity % trial
                 j = Tb(alpha, n);
@@ -224,15 +251,21 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
 
                         gpj = grad_velocity_trial(alpha, n, x, y);
 
-                        tmp(1) = tmp(1) + gq_tri_w(k) * mu * gpj(1) * gpi(1);
-                        tmp(2) = tmp(2) + gq_tri_w(k) * mu * gpj(2) * gpi(2);
-                        tmp(3) = tmp(3) + gq_tri_w(k) * mu * gpj(1) * gpi(2);
+                        tmp(1) = tmp(1) + gq_tri_w(k) * grad_U(n, k, 1, 1) * phij * phii;
+                        tmp(2) = tmp(2) + gq_tri_w(k) * U(n, k, 1) * gpj(1) * phii;
+                        tmp(3) = tmp(3) + gq_tri_w(k) * U(n, k, 2) * gpj(2) * phii;
+                        tmp(4) = tmp(4) + gq_tri_w(k) * grad_U(n, k, 1, 2) * phij * phii;
+                        tmp(5) = tmp(5) + gq_tri_w(k) * grad_U(n, k, 2, 1) * phij * phii;
+                        tmp(6) = tmp(6) + gq_tri_w(k) * grad_U(n, k, 2, 2) * phij * phii;
                     end
                     tmp = tmp * abs(Jac(n));
 
-                    A1(i, j) = A1(i, j) + tmp(1);
-                    A2(i, j) = A2(i, j) + tmp(2);
-                    A3(i, j) = A3(i, j) + tmp(3);
+                    AN1(i, j) = AN1(i, j) + tmp(1);
+                    AN2(i, j) = AN2(i, j) + tmp(2);
+                    AN3(i, j) = AN3(i, j) + tmp(3);
+                    AN4(i, j) = AN4(i, j) + tmp(4);
+                    AN5(i, j) = AN5(i, j) + tmp(5);
+                    AN6(i, j) = AN6(i, j) + tmp(6);
                 end
             end
         end
@@ -240,8 +273,38 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
         AN = [AN1 + AN2 + AN3, AN4, AO2; AN5, AN6 + AN2 + AN3, AO2; AO2.', AO2.', AO1];
         
         % source contributed by the convection term
+        bN1 = zeros(Nb_velocity, 1);
+        bN2 = zeros(Nb_velocity, 1);
+        bN3 = zeros(Nb_velocity, 1);
+        bN4 = zeros(Nb_velocity, 1);
+        for n = 1:N
+            for beta = 1:Nlb_velocity % test
+                i = Tb(beta, n);
+                
+                tmp = zeros(4, 1);
+                for k = 1:gq_tri_n
+                    x0 = gq_tri_x0(k);
+                    y0 = gq_tri_y0(k);
+
+                    phii = velocity_test_ref(beta, x0, y0);
+
+                    tmp(1) = tmp(1) + gq_tri_w(k) * U(n, k, 1) * grad_U(n, k, 1, 1) * phii;
+                    tmp(2) = tmp(2) + gq_tri_w(k) * U(n, k, 2) * grad_U(n, k, 1, 2) * phii;
+                    tmp(3) = tmp(3) + gq_tri_w(k) * U(n, k, 1) * grad_U(n, k, 2, 1) * phii;
+                    tmp(4) = tmp(4) + gq_tri_w(k) * U(n, k, 2) * grad_U(n, k, 2, 2) * phii;
+                end
+                tmp = tmp * abs(Jac(n));
+
+                bN1(i) = bN1(i) + tmp(1);
+                bN2(i) = bN2(i) + tmp(2);
+                bN3(i) = bN3(i) + tmp(3);
+                bN4(i) = bN4(i) + tmp(4);
+            end
+        end
+        bN = [bN1 + bN2; bN3 + bN4; bO];
         
-        
+        A_l = A + AN;
+        b_l = b + bN;
         
         % Dirichlet Boundary for velocity
         for k = 1:nbn
@@ -249,13 +312,13 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                 i = boundary_node(2, k);
                 g = u(Pb(1, i), Pb(2, i));
 
-                A(i, :) = 0;
-                A(i, i) = 1;
-                b(i) = g(1);
+                A_l(i, :) = 0;
+                A_l(i, i) = 1;
+                b_l(i) = g(1);
 
-                A(Nb_velocity + i, :) = 0;
-                A(Nb_velocity + i, Nb_velocity + i) = 1;
-                b(Nb_velocity + i) = g(2);
+                A_l(Nb_velocity + i, :) = 0;
+                A_l(Nb_velocity + i, Nb_velocity + i) = 1;
+                b_l(Nb_velocity + i) = g(2);
             end
         end
     
@@ -271,9 +334,9 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                     i = n_end1;
 
                     g = p(P(1, i), P(2, i));
-                    A(2*Nb_velocity+i, :) = 0;
-                    A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                    b(2*Nb_velocity+i) = g;
+                    A_l(2*Nb_velocity+i, :) = 0;
+                    A_l(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                    b_l(2*Nb_velocity+i) = g;
                 end
 
                 if(node_flag(n_end2) == false)
@@ -281,147 +344,145 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                     i = n_end1;
 
                     g = p(P(1, i), P(2, i));
-                    A(2*Nb_velocity+i, :) = 0;
-                    A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                    b(2*Nb_velocity+i) = g;
+                    A_l(2*Nb_velocity+i, :) = 0;
+                    A_l(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                    b_l(2*Nb_velocity+i) = g;
                 end
             end
         end
 
-        % Solve and Check
-        x = A\b;
+        % Solve
+        x_l = A_l\b_l;
         
         for i = 1:Nb_velocity
-            u_sol(1, i) = x(i);
-            u_sol(2, i) = x(Nb_velocity+i);
+            u_sol(1, i) = x_l(i);
+            u_sol(2, i) = x_l(Nb_velocity+i);
         end
         for i = 1:Nb_pressure
-            p_sol(i) = x(2*Nb_velocity+i);
+            p_sol(i) = x_l(2*Nb_velocity+i);
         end
         
-        
-    end
-    
-    
-    errnorm_velocity = zeros(1, 3); %inf, L2, semi-H1 respectively
-    for n = 1:N
-        for k = 1:gq_tri_n
-            x0 = gq_tri_x0(k);
-            y0 = gq_tri_y0(k);
-            x = gq_tri_x(n, k);
-            y = gq_tri_y(n, k);  
-            
-            w = zeros(2, 1);
-            for i = 1:Nlb_velocity
-                w = w + u_sol(:, Tb(i, n)) * velocity_trial_ref(i, x0, y0);
-            end
-            
-            err = norm(w - u(x, y), Inf);
-            if err > errnorm_velocity(1)
-                errnorm_velocity(1) = err;
+        % Check
+        errnorm_velocity = zeros(1, 3); %inf, L2, semi-H1 respectively
+        for n = 1:N
+            for k = 1:gq_tri_n
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k);  
+
+                w = zeros(2, 1);
+                for i = 1:Nlb_velocity
+                    w = w + u_sol(:, Tb(i, n)) * velocity_trial_ref(i, x0, y0);
+                end
+
+                err = norm(w - u(x, y), Inf);
+                if err > errnorm_velocity(1)
+                    errnorm_velocity(1) = err;
+                end
             end
         end
-    end
     
-    for n = 1:N
-        res = 0.0;
-        for k = 1:gq_tri_n
-            x0 = gq_tri_x0(k);
-            y0 = gq_tri_y0(k);
-            x = gq_tri_x(n, k);
-            y = gq_tri_y(n, k);  
-            
-            w = zeros(2, 1);
-            for i = 1:Nlb_velocity
-                w = w + u_sol(:, Tb(i, n)) * velocity_trial_ref(i, x0, y0);
+        for n = 1:N
+            res = 0.0;
+            for k = 1:gq_tri_n
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k);  
+
+                w = zeros(2, 1);
+                for i = 1:Nlb_velocity
+                    w = w + u_sol(:, Tb(i, n)) * velocity_trial_ref(i, x0, y0);
+                end
+
+                err = norm(w - u(x, y))^2;
+                res = res + gq_tri_w(k) * err;
             end
-            
-            err = norm(w - u(x, y))^2;
-            res = res + gq_tri_w(k) * err;
+            res = res * abs(Jac(n));
+            errnorm_velocity(2) = errnorm_velocity(2) + res;
         end
-        res = res * abs(Jac(n));
-        errnorm_velocity(2) = errnorm_velocity(2) + res;
-    end
-    errnorm_velocity(2) = sqrt(errnorm_velocity(2));
+        errnorm_velocity(2) = sqrt(errnorm_velocity(2));
+
+        for n = 1:N
+            res = 0.0;
+            for k = 1:gq_tri_n
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k);  
+
+                w = zeros(2, 2);
+                for i = 1:Nlb_velocity
+                    w = w + u_sol(:, Tb(i, n)) * grad_velocity_trial(i, n, x, y).';
+                end
+
+                err = norm(w - grad_u(x, y), 'fro')^2;
+                res = res + gq_tri_w(k) * err;
+            end
+            res = res * abs(Jac(n));
+            errnorm_velocity(3) = errnorm_velocity(3) + res;
+        end
+        errnorm_velocity(3) = sqrt(errnorm_velocity(3));
+
+        errnorm_pressure = zeros(1, 3); %inf, L2, semi-H1 respectively
+        for n = 1:N
+            for k = 1:gq_tri_n
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k); 
+
+                w = 0.0;
+                for i = 1:Nlb_pressure
+                    w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
+                end
+
+                err = abs(w - p(x, y));
+                if err > errnorm_pressure(1)
+                    errnorm_pressure(1) = err;
+                end
+            end
+        end
     
-    for n = 1:N
-        res = 0.0;
-        for k = 1:gq_tri_n
-            x = gq_tri_x(n, k);
-            y = gq_tri_y(n, k);  
-            
-            w = zeros(2, 2);
-            for i = 1:Nlb_velocity
-                w = w + u_sol(:, Tb(i, n)) * grad_velocity_trial(i, n, x, y).';
+        for n = 1:N
+            res = 0.0;
+            for k = 1:gq_tri_n
+                x0 = gq_tri_x0(k);
+                y0 = gq_tri_y0(k);
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k); 
+
+                w = 0.0;
+                for i = 1:Nlb_pressure
+                    w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
+                end
+
+                err = (w - p(x, y))^2;
+                res = res + gq_tri_w(k) * err;
             end
-            
-            err = norm(w - grad_u(x, y), 'fro')^2;
-            res = res + gq_tri_w(k) * err;
+            res = res * abs(Jac(n));
+            errnorm_pressure(2) = errnorm_pressure(2) + res;
         end
-        res = res * abs(Jac(n));
-        errnorm_velocity(3) = errnorm_velocity(3) + res;
-    end
-    errnorm_velocity(3) = sqrt(errnorm_velocity(3));
-    
-    errnorm_pressure = zeros(1, 3); %inf, L2, semi-H1 respectively
-    for n = 1:N
-        for k = 1:gq_tri_n
-            x0 = gq_tri_x0(k);
-            y0 = gq_tri_y0(k);
-            x = gq_tri_x(n, k);
-            y = gq_tri_y(n, k); 
-                        
-            w = 0.0;
-            for i = 1:Nlb_pressure
-                w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
+        errnorm_pressure(2) = sqrt(errnorm_pressure(2));
+
+        for n = 1:N
+            res = 0.0;
+            for k = 1:gq_tri_n
+                x = gq_tri_x(n, k);
+                y = gq_tri_y(n, k); 
+
+                w = zeros(2, 1);
+                for i = 1:Nlb_pressure
+                    w = w + p_sol(T(i, n)) * grad_pressure_trial(i, n, x, y);
+                end
+
+                err = norm(w - grad_p(x, y))^2;
+                res = res + gq_tri_w(k) * err;
             end
-            
-            err = abs(w - p(x, y));
-            if err > errnorm_pressure(1)
-                errnorm_pressure(1) = err;
-            end
+            res = res * abs(Jac(n));
+            errnorm_pressure(3) = errnorm_pressure(3) + res;
         end
+        errnorm_pressure(3) = sqrt(errnorm_pressure(3));
     end
-    
-    for n = 1:N
-        res = 0.0;
-        for k = 1:gq_tri_n
-            x0 = gq_tri_x0(k);
-            y0 = gq_tri_y0(k);
-            x = gq_tri_x(n, k);
-            y = gq_tri_y(n, k); 
-                        
-            w = 0.0;
-            for i = 1:Nlb_pressure
-                w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
-            end
-            
-            err = (w - p(x, y))^2;
-            res = res + gq_tri_w(k) * err;
-        end
-        res = res * abs(Jac(n));
-        errnorm_pressure(2) = errnorm_pressure(2) + res;
-    end
-    errnorm_pressure(2) = sqrt(errnorm_pressure(2));
-    
-    for n = 1:N
-        res = 0.0;
-        for k = 1:gq_tri_n
-            x = gq_tri_x(n, k);
-            y = gq_tri_y(n, k); 
-                        
-            w = zeros(2, 1);
-            for i = 1:Nlb_pressure
-                w = w + p_sol(T(i, n)) * grad_pressure_trial(i, n, x, y);
-            end
-            
-            err = norm(w - grad_p(x, y))^2;
-            res = res + gq_tri_w(k) * err;
-        end
-        res = res * abs(Jac(n));
-        errnorm_pressure(3) = errnorm_pressure(3) + res;
-    end
-    errnorm_pressure(3) = sqrt(errnorm_pressure(3));
 end
 
 %% Mesh generation
