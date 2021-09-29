@@ -216,12 +216,16 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                     j = Tb(alpha, n);
                     
                     phij = velocity_trial_ref(alpha, x0, y0);
-                    gp = grad_velocity_trial(n, alpha, x, y);
+                    gp = grad_velocity_trial(alpha, n, x, y);
                     
-                    U(n, k, :) = U(n, k, :) + u_sol(:, j) * phij;
+                    U(n, k, 1) = U(n, k, 1) + u_sol(1, j) * phij;
+                    U(n, k, 2) = U(n, k, 2) + u_sol(2, j) * phij;
 
-                    grad_U(n, k, 1, :) = grad_U(n, k, 1, :) + u_sol(1, j) * gp;
-                    grad_U(n, k, 2, :) = grad_U(n, k, 2, :) + u_sol(2, j) * gp;
+                    grad_U(n, k, 1, 1) = grad_U(n, k, 1, 1) + u_sol(1, j) * gp(1);
+                    grad_U(n, k, 1, 2) = grad_U(n, k, 1, 2) + u_sol(1, j) * gp(2);
+                    
+                    grad_U(n, k, 2, 1) = grad_U(n, k, 2, 1) + u_sol(2, j) * gp(1);
+                    grad_U(n, k, 2, 2) = grad_U(n, k, 2, 2) + u_sol(2, j) * gp(2);
                 end
             end
         end
@@ -303,8 +307,8 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
         end
         bN = [bN1 + bN2; bN3 + bN4; bO];
         
-        A_l = A + AN;
-        b_l = b + bN;
+        AN = A + AN;
+        bN = b + bN;
         
         % Dirichlet Boundary for velocity
         for k = 1:nbn
@@ -312,13 +316,13 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                 i = boundary_node(2, k);
                 g = u(Pb(1, i), Pb(2, i));
 
-                A_l(i, :) = 0;
-                A_l(i, i) = 1;
-                b_l(i) = g(1);
+                AN(i, :) = 0;
+                AN(i, i) = 1;
+                bN(i) = g(1);
 
-                A_l(Nb_velocity + i, :) = 0;
-                A_l(Nb_velocity + i, Nb_velocity + i) = 1;
-                b_l(Nb_velocity + i) = g(2);
+                AN(Nb_velocity + i, :) = 0;
+                AN(Nb_velocity + i, Nb_velocity + i) = 1;
+                bN(Nb_velocity + i) = g(2);
             end
         end
     
@@ -334,9 +338,9 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                     i = n_end1;
 
                     g = p(P(1, i), P(2, i));
-                    A_l(2*Nb_velocity+i, :) = 0;
-                    A_l(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                    b_l(2*Nb_velocity+i) = g;
+                    AN(2*Nb_velocity+i, :) = 0;
+                    AN(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                    bN(2*Nb_velocity+i) = g;
                 end
 
                 if(node_flag(n_end2) == false)
@@ -344,22 +348,41 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
                     i = n_end1;
 
                     g = p(P(1, i), P(2, i));
-                    A_l(2*Nb_velocity+i, :) = 0;
-                    A_l(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                    b_l(2*Nb_velocity+i) = g;
+                    AN(2*Nb_velocity+i, :) = 0;
+                    AN(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                    bN(2*Nb_velocity+i) = g;
                 end
             end
         end
 
         % Solve
-        x_l = A_l\b_l;
+        xN = AN\bN;
+        
+        u_old = u_sol;
+        p_old = p_sol;
         
         for i = 1:Nb_velocity
-            u_sol(1, i) = x_l(i);
-            u_sol(2, i) = x_l(Nb_velocity+i);
+            u_sol(1, i) = xN(i);
+            u_sol(2, i) = xN(Nb_velocity+i);
         end
         for i = 1:Nb_pressure
-            p_sol(i) = x_l(2*Nb_velocity+i);
+            p_sol(i) = xN(2*Nb_velocity+i);
+        end
+        
+        newton_diff_velocity = 0.0;
+        for i = 1:Nb_velocity
+            newton_diff_velocity = newton_diff_velocity + norm(u_sol(:, i) - u_old(:, i), 'Inf');
+        end
+        newton_diff_velocity = newton_diff_velocity / Nb_velocity;
+        newton_diff_pressure = 0.0;
+        for i = 1:Nb_pressure
+            newton_diff_pressure = newton_diff_pressure + abs(p_sol(i) - p_old(i));
+        end
+        newton_diff_pressure = newton_diff_pressure / Nb_pressure;
+        
+        fprintf("  Iter%d: diff_V=%g, diff_p=%g\n", newton_iter, newton_diff_velocity, newton_diff_pressure);
+        if newton_diff_velocity < 1e-8 && newton_diff_pressure < 1e-8
+            converged = true;
         end
         
         % Check
@@ -834,8 +857,8 @@ end
 function [ret] = f(x, y)
     global mu
     ret = zeros(2, 1);
-    ret(1) = -2 * mu * (x^2 + y^2 + 0.5 * exp(-y)) + pi^2 * cos(pi * x) * cos(2 * pi * y); 
-    ret(2) = mu * (4 * x * y - pi^3 * sin(pi * x)) + 2 * pi * (2 - pi * sin(pi * x)) * sin(2 * pi * y); 
+    ret(1) = -2 * mu * (x^2 + y^2 + 0.5 * exp(-y)) + pi^2 * cos(pi * x) * cos(2 * pi * y) + 2 * x * y^2 * (x^2 * y^2 + exp(-y)) + (-2/3 * x * y^3 + 2 - pi * sin(pi * x))*(2 * x^2 * y - exp(-y)); 
+    ret(2) = mu * (4 * x * y - pi^3 * sin(pi * x)) + 2 * pi * (2 - pi * sin(pi * x)) * sin(2 * pi * y) + (x^2 * y^2 + exp(-y)) * (-2/3*y^3 - pi^2 * cos(pi * x)) - 2*x*y^2 * (-2/3*x*y^3 + 2 - pi * sin(pi * x)); 
 end
 
 function [ret] = grad_u(x, y)
