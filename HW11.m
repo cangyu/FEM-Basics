@@ -117,11 +117,11 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 
                 tmp = zeros(3, 1);
                 for k = 1:gq_tri_n
-                    x_next = gq_tri_x(n, k);
+                    x = gq_tri_x(n, k);
                     y = gq_tri_y(n, k);                    
                     
-                    gpj = grad_velocity_trial(alpha, n, x_next, y);
-                    gpi = grad_velocity_test(beta, n, x_next, y);
+                    gpj = grad_velocity_trial(alpha, n, x, y);
+                    gpi = grad_velocity_test(beta, n, x, y);
                     
                     tmp(1) = tmp(1) + gq_tri_w(k) * mu * gpj(1) * gpi(1);
                     tmp(2) = tmp(2) + gq_tri_w(k) * mu * gpj(2) * gpi(2);
@@ -148,11 +148,11 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 for k = 1:gq_tri_n
                     x0 = gq_tri_x0(k);
                     y0 = gq_tri_y0(k);
-                    x_next = gq_tri_x(n, k);
+                    x = gq_tri_x(n, k);
                     y = gq_tri_y(n, k);
                     
                     psij = pressure_trial_ref(alpha, x0, y0);
-                    gphii = grad_velocity_test(beta, n, x_next, y);
+                    gphii = grad_velocity_test(beta, n, x, y);
                     
                     tmp5 = tmp5 + gq_tri_w(k) * -psij * gphii(1);
                     tmp6 = tmp6 + gq_tri_w(k) * -psij * gphii(2);
@@ -196,8 +196,8 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
     A03 = sparse(Nb_velocity, Nb_velocity);
     M = [Me, A03, A02; A03, Me, A02; A02.', A02.', A01];
     
-    M_tilde = M / (theta * dt);
-    A_tilde = M_tilde + A;
+    A_tilde = M / dt + theta * A;
+    A_res = M / dt - (1-theta) * A;
     
     % Initialize
     u_sol = zeros(2, Nb_velocity);
@@ -222,10 +222,10 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
             for k = 1:gq_tri_n
                 x0 = gq_tri_x0(k);
                 y0 = gq_tri_y0(k);
-                x_next = gq_tri_x(n, k);
+                x = gq_tri_x(n, k);
                 y = gq_tri_y(n, k);  
                 
-                fval = f(x_next, y, t_start);
+                fval = f(x, y, t_start);
                 phii = velocity_test_ref(beta, x0, y0);
                 
                 tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
@@ -269,7 +269,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
 
             if(node_flag(n_end2) == false)
                 node_flag(n_end2) = true;
-                i = n_end1;
+                i = n_end2;
 
                 A_tilde(2*Nb_velocity+i, :) = 0;
                 A_tilde(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
@@ -296,10 +296,10 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 for k = 1:gq_tri_n
                     x0 = gq_tri_x0(k);
                     y0 = gq_tri_y0(k);
-                    x_next = gq_tri_x(n, k);
+                    x = gq_tri_x(n, k);
                     y = gq_tri_y(n, k);  
 
-                    fval = f(x_next, y, t_next);
+                    fval = f(x, y, t_next);
                     phii = velocity_test_ref(beta, x0, y0);
 
                     tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
@@ -313,7 +313,18 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
         end
         b_next = [b1; b2; bO];
         
-        b_tilde = theta * b_next + (1.0-theta) * b_cur + M_tilde * x_cur;
+        b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res * x_cur;
+        
+        % Dirichlet Boundary for velocity
+        for k = 1:nbn
+            if boundary_node(1, k) == -1
+                i = boundary_node(2, k);
+                g = u(Pb(1, i), Pb(2, i), t_next);
+                
+                b_tilde(i) = g(1);
+                b_tilde(Nb_velocity + i) = g(2);
+            end
+        end
         
         % Dirichlet Boundary for pressure
         node_flag = false(1, Nb_pressure);
@@ -326,20 +337,16 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                     node_flag(n_end1) = true;
                     i = n_end1;
 
-                    g = p(P(1, i), P(2, i));
-                    A(2*Nb_velocity+i, :) = 0;
-                    A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                    b(2*Nb_velocity+i) = g;
+                    g = p(P(1, i), P(2, i), t_next);
+                    b_tilde(2*Nb_velocity+i) = g;
                 end
 
                 if(node_flag(n_end2) == false)
                     node_flag(n_end2) = true;
-                    i = n_end1;
+                    i = n_end2;
 
-                    g = p(P(1, i), P(2, i));
-                    A(2*Nb_velocity+i, :) = 0;
-                    A(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-                    b(2*Nb_velocity+i) = g;
+                    g = p(P(1, i), P(2, i), t_next);
+                    b_tilde(2*Nb_velocity+i) = g;
                 end
             end
         end
@@ -366,7 +373,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
             y0 = gq_tri_y0(k);
-            x_next = gq_tri_x(n, k);
+            x = gq_tri_x(n, k);
             y = gq_tri_y(n, k);  
             
             w = zeros(2, 1);
@@ -374,7 +381,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 w = w + u_sol(:, Tb(i, n)) * velocity_trial_ref(i, x0, y0);
             end
             
-            err = norm(w - u(x_next, y), Inf);
+            err = norm(w - u(x, y, t_end), Inf);
             if err > errnorm_velocity(1)
                 errnorm_velocity(1) = err;
             end
@@ -386,7 +393,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
             y0 = gq_tri_y0(k);
-            x_next = gq_tri_x(n, k);
+            x = gq_tri_x(n, k);
             y = gq_tri_y(n, k);  
             
             w = zeros(2, 1);
@@ -394,7 +401,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 w = w + u_sol(:, Tb(i, n)) * velocity_trial_ref(i, x0, y0);
             end
             
-            err = norm(w - u(x_next, y))^2;
+            err = norm(w - u(x, y, t_end))^2;
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
@@ -405,15 +412,15 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
     for n = 1:N
         res = 0.0;
         for k = 1:gq_tri_n
-            x_next = gq_tri_x(n, k);
+            x = gq_tri_x(n, k);
             y = gq_tri_y(n, k);  
             
             w = zeros(2, 2);
             for i = 1:Nlb_velocity
-                w = w + u_sol(:, Tb(i, n)) * grad_velocity_trial(i, n, x_next, y).';
+                w = w + u_sol(:, Tb(i, n)) * grad_velocity_trial(i, n, x, y).';
             end
             
-            err = norm(w - grad_u(x_next, y), 'fro')^2;
+            err = norm(w - grad_u(x, y, t_end), 'fro')^2;
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
@@ -426,7 +433,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
             y0 = gq_tri_y0(k);
-            x_next = gq_tri_x(n, k);
+            x = gq_tri_x(n, k);
             y = gq_tri_y(n, k); 
                         
             w = 0.0;
@@ -434,7 +441,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
             end
             
-            err = abs(w - p(x_next, y));
+            err = abs(w - p(x, y, t_end));
             if err > errnorm_pressure(1)
                 errnorm_pressure(1) = err;
             end
@@ -446,7 +453,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
         for k = 1:gq_tri_n
             x0 = gq_tri_x0(k);
             y0 = gq_tri_y0(k);
-            x_next = gq_tri_x(n, k);
+            x = gq_tri_x(n, k);
             y = gq_tri_y(n, k); 
                         
             w = 0.0;
@@ -454,7 +461,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 w = w + p_sol(T(i, n)) * pressure_trial_ref(i, x0, y0);
             end
             
-            err = (w - p(x_next, y))^2;
+            err = (w - p(x, y, t_end))^2;
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
@@ -465,15 +472,15 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
     for n = 1:N
         res = 0.0;
         for k = 1:gq_tri_n
-            x_next = gq_tri_x(n, k);
+            x = gq_tri_x(n, k);
             y = gq_tri_y(n, k); 
                         
             w = zeros(2, 1);
             for i = 1:Nlb_pressure
-                w = w + p_sol(T(i, n)) * grad_pressure_trial(i, n, x_next, y);
+                w = w + p_sol(T(i, n)) * grad_pressure_trial(i, n, x, y);
             end
             
-            err = norm(w - grad_p(x_next, y))^2;
+            err = norm(w - grad_p(x, y, t_end))^2;
             res = res + gq_tri_w(k) * err;
         end
         res = res * abs(Jac(n));
