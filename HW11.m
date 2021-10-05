@@ -22,8 +22,8 @@ for i = 1:N_CASE
     t0 = 0.0;
     t1 = 1.0;
     
-    theta = 0.5;
-    dt0 = power(h(i), 1.5);
+    theta = 1.0;
+    dt0 = 8*power(h(i), 3);
     loop_cnt = ceil((t1 - t0)/dt0);
     dt = (t1 - t0)/loop_cnt;
     
