@@ -345,7 +345,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_steady_navier_stokes(x_
 
                 if(node_flag(n_end2) == false)
                     node_flag(n_end2) = true;
-                    i = n_end1;
+                    i = n_end2;
 
                     g = p(P(1, i), P(2, i));
                     AN(2*Nb_velocity+i, :) = 0;
