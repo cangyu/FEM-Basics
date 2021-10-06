@@ -22,14 +22,13 @@ for i = 1:N_CASE
     t0 = 0.0;
     t1 = 1.0;
     
-    theta = 0.5;
-    dt0 = power(h(i), 1.5);
+    dt0 = 8*power(h(i), 3);
     loop_cnt = ceil((t1 - t0)/dt0);
     dt = (t1 - t0)/loop_cnt;
     
-    fprintf("\nCASE%d: h=1/%d, hx=%g, hy=%g, dt=%g, theta=%g\n", i, N, h1, h2, dt, theta);
+    fprintf("\nCASE%d: h=1/%d, hx=%g, hy=%g, dt=%g\n", i, N, h1, h2, dt);
     
-    [err_velocity(:, i), err_pressure(:, i)] = solve_2d_unsteady_stokes(xMin, xMax, yMin, yMax, N1, N2, t0, t1, loop_cnt, theta);
+    [err_velocity(:, i), err_pressure(:, i)] = solve_2d_unsteady_navier_stokes(xMin, xMax, yMin, yMax, N1, N2, t0, t1, loop_cnt);
     
     fprintf("\n  Velocity:  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err_velocity(1,i), err_velocity(2,i), err_velocity(3,i));
     fprintf("\n  Pressure:  |err|_inf=%e, |err|_L2=%e, |err|_H1=%e\n", err_pressure(1,i), err_pressure(2,i), err_pressure(3,i));
@@ -59,7 +58,7 @@ legend('Velocity Inf', 'Velocity L2', 'Velocity H1-semi', 'Pressure Inf', 'Press
 
 %% Coefficient assembly
 
-function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, x_max, y_min, y_max, N1, N2, t_start, t_end, n_iter, theta)
+function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(x_min, x_max, y_min, y_max, N1, N2, t_start, t_end, n_iter)
     global P T Pb Tb Jac
     global mu
     
@@ -196,8 +195,8 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
     A03 = sparse(Nb_velocity, Nb_velocity);
     M = [Me, A03, A02; A03, Me, A02; A02.', A02.', A01];
     
-    A_tilde = M / dt + theta * A;
-    A_res = M / dt - (1-theta) * A;
+    A_tilde = M / dt + A;
+    A_res = M / dt;
     
     % Initialize
     u_sol = zeros(2, Nb_velocity);
@@ -223,7 +222,7 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
                 x0 = gq_tri_x0(k);
                 y0 = gq_tri_y0(k);
                 x = gq_tri_x(n, k);
-                y = gq_tri_y(n, k);  
+                y = gq_tri_y(n, k);
                 
                 fval = f(x, y, t_start);
                 phii = velocity_test_ref(beta, x0, y0);
@@ -284,81 +283,194 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_stokes(x_min, 
         t_next = t_cur + dt;
         cnt = cnt + 1;
         fprintf("  iter%4d: t_cur=%10g, t_next=%10g\n", cnt, t_cur, t_next);
-
-        % Assemble the load vector
-        b1 = zeros(Nb_velocity, 1);
-        b2 = zeros(Nb_velocity, 1);
-        for n = 1:N
-            for beta = 1:Nlb_velocity % test
-                i = Tb(beta, n);
-
-                tmp = zeros(2, 1);
+        
+        converged=false;
+        newton_iter = 0;
+        while ~converged
+            newton_iter=newton_iter+1;
+            
+            % gradient of velocity at previous iteration
+            U = zeros(N, gq_tri_n, 2);
+            grad_U = zeros(N, gq_tri_n, 2, 2);
+            for n = 1:N
                 for k = 1:gq_tri_n
                     x0 = gq_tri_x0(k);
                     y0 = gq_tri_y0(k);
                     x = gq_tri_x(n, k);
-                    y = gq_tri_y(n, k);  
+                    y = gq_tri_y(n, k);
 
-                    fval = f(x, y, t_next);
-                    phii = velocity_test_ref(beta, x0, y0);
+                    for alpha = 1:Nlb_velocity
+                        j = Tb(alpha, n);
 
-                    tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
-                    tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * phii;
-                end
-                tmp = tmp * abs(Jac(n));
+                        phij = velocity_trial_ref(alpha, x0, y0);
+                        gp = grad_velocity_trial(alpha, n, x, y);
 
-                b1(i) = b1(i) + tmp(1);
-                b2(i) = b2(i) + tmp(2);
-            end
-        end
-        b_next = [b1; b2; bO];
-        
-        b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res * x_cur;
-        
-        % Dirichlet Boundary for velocity
-        for k = 1:nbn
-            if boundary_node(1, k) == -1
-                i = boundary_node(2, k);
-                g = u(Pb(1, i), Pb(2, i), t_next);
-                
-                b_tilde(i) = g(1);
-                b_tilde(Nb_velocity + i) = g(2);
-            end
-        end
-        
-        % Dirichlet Boundary for pressure
-        node_flag = false(1, Nb_pressure);
-        for k = 1:nbe
-            if boundary_edge(1, k) == -1
-                n_end1 = boundary_edge(3, k);
-                n_end2 = boundary_edge(4, k);
+                        U(n, k, 1) = U(n, k, 1) + u_sol(1, j) * phij;
+                        U(n, k, 2) = U(n, k, 2) + u_sol(2, j) * phij;
 
-                if(node_flag(n_end1) == false)
-                    node_flag(n_end1) = true;
-                    i = n_end1;
+                        grad_U(n, k, 1, 1) = grad_U(n, k, 1, 1) + u_sol(1, j) * gp(1);
+                        grad_U(n, k, 1, 2) = grad_U(n, k, 1, 2) + u_sol(1, j) * gp(2);
 
-                    g = p(P(1, i), P(2, i), t_next);
-                    b_tilde(2*Nb_velocity+i) = g;
-                end
-
-                if(node_flag(n_end2) == false)
-                    node_flag(n_end2) = true;
-                    i = n_end2;
-
-                    g = p(P(1, i), P(2, i), t_next);
-                    b_tilde(2*Nb_velocity+i) = g;
+                        grad_U(n, k, 2, 1) = grad_U(n, k, 2, 1) + u_sol(2, j) * gp(1);
+                        grad_U(n, k, 2, 2) = grad_U(n, k, 2, 2) + u_sol(2, j) * gp(2);
+                    end
                 end
             end
-        end
-                
-        % Solve
-        x_next = A_tilde\b_tilde;
-        for i = 1:Nb_velocity
-            u_sol(1, i) = x_next(i);
-            u_sol(2, i) = x_next(Nb_velocity+i);
-        end
-        for i = 1:Nb_pressure
-            p_sol(i) = x_next(2*Nb_velocity+i);
+
+            % coefficients contributed by the convection term
+            AN1 = sparse(Nb_velocity, Nb_velocity);
+            AN2 = sparse(Nb_velocity, Nb_velocity);
+            AN3 = sparse(Nb_velocity, Nb_velocity);
+            AN4 = sparse(Nb_velocity, Nb_velocity);
+            AN5 = sparse(Nb_velocity, Nb_velocity);
+            AN6 = sparse(Nb_velocity, Nb_velocity);
+            for n = 1:N
+                for alpha = 1:Nlb_velocity % trial
+                    j = Tb(alpha, n);
+                    for beta = 1:Nlb_velocity % test
+                        i = Tb(beta, n);
+
+                        tmp = zeros(6, 1);
+                        for k = 1:gq_tri_n
+                            x0 = gq_tri_x0(k);
+                            y0 = gq_tri_y0(k);
+                            x = gq_tri_x(n, k);
+                            y = gq_tri_y(n, k);
+
+                            phij = velocity_trial_ref(alpha, x0, y0);
+                            phii = velocity_test_ref(beta, x0, y0);
+
+                            gpj = grad_velocity_trial(alpha, n, x, y);
+
+                            tmp(1) = tmp(1) + gq_tri_w(k) * grad_U(n, k, 1, 1) * phij * phii;
+                            tmp(2) = tmp(2) + gq_tri_w(k) * U(n, k, 1) * gpj(1) * phii;
+                            tmp(3) = tmp(3) + gq_tri_w(k) * U(n, k, 2) * gpj(2) * phii;
+                            tmp(4) = tmp(4) + gq_tri_w(k) * grad_U(n, k, 1, 2) * phij * phii;
+                            tmp(5) = tmp(5) + gq_tri_w(k) * grad_U(n, k, 2, 1) * phij * phii;
+                            tmp(6) = tmp(6) + gq_tri_w(k) * grad_U(n, k, 2, 2) * phij * phii;
+                        end
+                        tmp = tmp * abs(Jac(n));
+
+                        AN1(i, j) = AN1(i, j) + tmp(1);
+                        AN2(i, j) = AN2(i, j) + tmp(2);
+                        AN3(i, j) = AN3(i, j) + tmp(3);
+                        AN4(i, j) = AN4(i, j) + tmp(4);
+                        AN5(i, j) = AN5(i, j) + tmp(5);
+                        AN6(i, j) = AN6(i, j) + tmp(6);
+                    end
+                end
+            end
+            AN = [AN1 + AN2 + AN3, AN4, AO2; AN5, AN6 + AN2 + AN3, AO2; AO2.', AO2.', AO1];
+
+            % source contributed by the convection term
+            bN1 = zeros(Nb_velocity, 1);
+            bN2 = zeros(Nb_velocity, 1);
+            bN3 = zeros(Nb_velocity, 1);
+            bN4 = zeros(Nb_velocity, 1);
+            for n = 1:N
+                for beta = 1:Nlb_velocity % test
+                    i = Tb(beta, n);
+
+                    tmp = zeros(4, 1);
+                    for k = 1:gq_tri_n
+                        x0 = gq_tri_x0(k);
+                        y0 = gq_tri_y0(k);
+
+                        phii = velocity_test_ref(beta, x0, y0);
+
+                        tmp(1) = tmp(1) + gq_tri_w(k) * U(n, k, 1) * grad_U(n, k, 1, 1) * phii;
+                        tmp(2) = tmp(2) + gq_tri_w(k) * U(n, k, 2) * grad_U(n, k, 1, 2) * phii;
+                        tmp(3) = tmp(3) + gq_tri_w(k) * U(n, k, 1) * grad_U(n, k, 2, 1) * phii;
+                        tmp(4) = tmp(4) + gq_tri_w(k) * U(n, k, 2) * grad_U(n, k, 2, 2) * phii;
+                    end
+                    tmp = tmp * abs(Jac(n));
+
+                    bN1(i) = bN1(i) + tmp(1);
+                    bN2(i) = bN2(i) + tmp(2);
+                    bN3(i) = bN3(i) + tmp(3);
+                    bN4(i) = bN4(i) + tmp(4);
+                end
+            end
+            bN = [bN1 + bN2; bN3 + bN4; bO];
+
+            AN = A + AN;
+            bN = b + bN;
+            
+            % Assemble the load vector
+            b1 = zeros(Nb_velocity, 1);
+            b2 = zeros(Nb_velocity, 1);
+            for n = 1:N
+                for beta = 1:Nlb_velocity % test
+                    i = Tb(beta, n);
+
+                    tmp = zeros(2, 1);
+                    for k = 1:gq_tri_n
+                        x0 = gq_tri_x0(k);
+                        y0 = gq_tri_y0(k);
+                        x = gq_tri_x(n, k);
+                        y = gq_tri_y(n, k);  
+
+                        fval = f(x, y, t_next);
+                        phii = velocity_test_ref(beta, x0, y0);
+
+                        tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
+                        tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * phii;
+                    end
+                    tmp = tmp * abs(Jac(n));
+
+                    b1(i) = b1(i) + tmp(1);
+                    b2(i) = b2(i) + tmp(2);
+                end
+            end
+            b_next = [b1; b2; bO];
+
+            b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res * x_cur;
+
+            % Dirichlet Boundary for velocity
+            for k = 1:nbn
+                if boundary_node(1, k) == -1
+                    i = boundary_node(2, k);
+                    g = u(Pb(1, i), Pb(2, i), t_next);
+
+                    b_tilde(i) = g(1);
+                    b_tilde(Nb_velocity + i) = g(2);
+                end
+            end
+
+            % Dirichlet Boundary for pressure
+            node_flag = false(1, Nb_pressure);
+            for k = 1:nbe
+                if boundary_edge(1, k) == -1
+                    n_end1 = boundary_edge(3, k);
+                    n_end2 = boundary_edge(4, k);
+
+                    if(node_flag(n_end1) == false)
+                        node_flag(n_end1) = true;
+                        i = n_end1;
+
+                        g = p(P(1, i), P(2, i), t_next);
+                        b_tilde(2*Nb_velocity+i) = g;
+                    end
+
+                    if(node_flag(n_end2) == false)
+                        node_flag(n_end2) = true;
+                        i = n_end2;
+
+                        g = p(P(1, i), P(2, i), t_next);
+                        b_tilde(2*Nb_velocity+i) = g;
+                    end
+                end
+            end
+
+            % Solve
+            x_next = A_tilde\b_tilde;
+            for i = 1:Nb_velocity
+                u_sol(1, i) = x_next(i);
+                u_sol(2, i) = x_next(Nb_velocity+i);
+            end
+            for i = 1:Nb_pressure
+                p_sol(i) = x_next(2*Nb_velocity+i);
+            end            
         end
         
         % Update
@@ -837,9 +949,16 @@ end
 
 function [ret] = f(x, y, t)
     global mu
+    
+    tmp = zeros(2, 1);
+    tmp(1) = -2 * mu * (x^2 + y^2 + 0.5 * exp(-y)) + pi^2 * cos(pi * x) * cos(2 * pi * y) + 2 * x * y^2 * (x^2 * y^2 + exp(-y)) + (-2/3 * x * y^3 + 2 - pi * sin(pi * x))*(2 * x^2 * y - exp(-y)); 
+    tmp(2) = mu * (4 * x * y - pi^3 * sin(pi * x)) + 2 * pi * (2 - pi * sin(pi * x)) * sin(2 * pi * y) + (x^2 * y^2 + exp(-y)) * (-2/3*y^3 - pi^2 * cos(pi * x)) - 2*x*y^2 * (-2/3*x*y^3 + 2 - pi * sin(pi * x)); 
+
     ret = zeros(2, 1);
-    ret(1) = -2 * mu * (x^2 + y^2 + 0.5 * exp(-y)) * cos(2*pi*t) + pi^2 * cos(pi * x) * cos(2 * pi * y) * cos(2*pi*t) - 2 * pi * (x^2 * y^2 + exp(-y)) * sin(2*pi*t); 
-    ret(2) = (mu * (4 * x * y - pi^3 * sin(pi * x)) + 2 * pi * (2 - pi * sin(pi * x)) * sin(2 * pi * y)) * cos(2*pi*t) - 2 * pi * sin(2*pi*t) * (-2.0/3 * x * y^3 + 2 - pi * sin(pi * x)); 
+    ret(1) = x^2 * y^2 + exp(-y); 
+    ret(2) = -2.0/3 * x * y^3 + 2 - pi * sin(pi * x); 
+    
+    ret = -2 * pi * sin(2*pi*t) * ret + tmp * cos(2*pi*t);
 end
 
 function [ret] = grad_u(x, y, t)
