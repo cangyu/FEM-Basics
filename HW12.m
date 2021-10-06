@@ -1,6 +1,6 @@
 clear; close all; clc;
 
-N_CASE = 6;
+N_CASE = 4;
 h = zeros(1, N_CASE);
 err_velocity = zeros(3, N_CASE);
 err_pressure = zeros(3, N_CASE);
@@ -153,8 +153,8 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
                     psij = pressure_trial_ref(alpha, x0, y0);
                     gphii = grad_velocity_test(beta, n, x, y);
                     
-                    tmp5 = tmp5 + gq_tri_w(k) * -psij * gphii(1);
-                    tmp6 = tmp6 + gq_tri_w(k) * -psij * gphii(2);
+                    tmp5 = tmp5 + gq_tri_w(k) * (-psij * gphii(1));
+                    tmp6 = tmp6 + gq_tri_w(k) * (-psij * gphii(2));
                 end
                 tmp5 = tmp5 * abs(Jac(n));
                 tmp6 = tmp6 * abs(Jac(n));
@@ -195,8 +195,8 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
     A03 = sparse(Nb_velocity, Nb_velocity);
     M = [Me, A03, A02; A03, Me, A02; A02.', A02.', A01];
     
-    A_tilde = M / dt + A;
-    A_res = M / dt;
+    A_fixed = M / dt + A;
+    M_fixed = M / dt;
     
     % Initialize
     u_sol = zeros(2, Nb_velocity);
@@ -209,80 +209,43 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
     end
     x_cur = [u_sol(1, :).'; u_sol(2, :).'; p_sol.'];
     
-    % Initial load vector
-    b1 = zeros(Nb_velocity, 1);
-    b2 = zeros(Nb_velocity, 1);
-    bO = zeros(Nb_pressure, 1);
-    for n = 1:N
-        for beta = 1:Nlb_velocity % test
-            i = Tb(beta, n);
-            
-            tmp = zeros(2, 1);
-            for k = 1:gq_tri_n
-                x0 = gq_tri_x0(k);
-                y0 = gq_tri_y0(k);
-                x = gq_tri_x(n, k);
-                y = gq_tri_y(n, k);
-                
-                fval = f(x, y, t_start);
-                phii = velocity_test_ref(beta, x0, y0);
-                
-                tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
-                tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * phii;
-            end
-            tmp = tmp * abs(Jac(n));
-            
-            b1(i) = b1(i) + tmp(1);
-            b2(i) = b2(i) + tmp(2);
-        end
-    end
-    b_cur = [b1; b2; bO];
-    
-    % Dirichlet Boundary for velocity
-    for k = 1:nbn
-        if boundary_node(1, k) == -1
-            i = boundary_node(2, k);
-
-            A_tilde(i, :) = 0;
-            A_tilde(i, i) = 1;
-
-            A_tilde(Nb_velocity + i, :) = 0;
-            A_tilde(Nb_velocity + i, Nb_velocity + i) = 1;
-        end
-    end
-    
-    % Dirichlet Boundary for pressure
-    node_flag = false(1, Nb_pressure);
-    for k = 1:nbe
-        if boundary_edge(1, k) == -1
-            n_end1 = boundary_edge(3, k);
-            n_end2 = boundary_edge(4, k);
-
-            if(node_flag(n_end1) == false)
-                node_flag(n_end1) = true;
-                i = n_end1;
-
-                A_tilde(2*Nb_velocity+i, :) = 0;
-                A_tilde(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-            end
-
-            if(node_flag(n_end2) == false)
-                node_flag(n_end2) = true;
-                i = n_end2;
-
-                A_tilde(2*Nb_velocity+i, :) = 0;
-                A_tilde(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
-            end
-        end
-    end
-    
     % Time-Marching
     t_cur = t_start;
     cnt = 0;
     while cnt < n_iter
         t_next = t_cur + dt;
         cnt = cnt + 1;
-        fprintf("  iter%4d: t_cur=%10g, t_next=%10g\n", cnt, t_cur, t_next);
+        fprintf("  Time-Step%4d: t_cur=%10g, t_next=%10g\n", cnt, t_cur, t_next);
+        
+        % Assemble the load vector
+        b1 = zeros(Nb_velocity, 1);
+        b2 = zeros(Nb_velocity, 1);
+        bO = zeros(Nb_pressure, 1);
+        for n = 1:N
+            for beta = 1:Nlb_velocity % test
+                i = Tb(beta, n);
+
+                tmp = zeros(2, 1);
+                for k = 1:gq_tri_n
+                    x0 = gq_tri_x0(k);
+                    y0 = gq_tri_y0(k);
+                    x = gq_tri_x(n, k);
+                    y = gq_tri_y(n, k);  
+
+                    fval = f(x, y, t_next);
+                    phii = velocity_test_ref(beta, x0, y0);
+
+                    tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
+                    tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * phii;
+                end
+                tmp = tmp * abs(Jac(n));
+
+                b1(i) = b1(i) + tmp(1);
+                b2(i) = b2(i) + tmp(2);
+            end
+        end
+        b = [b1; b2; bO];
+        b = b + M_fixed * x_cur;
         
         converged=false;
         newton_iter = 0;
@@ -360,8 +323,10 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
                     end
                 end
             end
-            AN = [AN1 + AN2 + AN3, AN4, AO2; AN5, AN6 + AN2 + AN3, AO2; AO2.', AO2.', AO1];
+            AN = [AN1 + AN2 + AN3, AN4, A02; AN5, AN6 + AN2 + AN3, A02; A02.', A02.', A01];
 
+            A_tilde = A_fixed + AN;
+            
             % source contributed by the convection term
             bN1 = zeros(Nb_velocity, 1);
             bN2 = zeros(Nb_velocity, 1);
@@ -392,51 +357,26 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
                 end
             end
             bN = [bN1 + bN2; bN3 + bN4; bO];
-
-            AN = A + AN;
-            bN = b + bN;
             
-            % Assemble the load vector
-            b1 = zeros(Nb_velocity, 1);
-            b2 = zeros(Nb_velocity, 1);
-            for n = 1:N
-                for beta = 1:Nlb_velocity % test
-                    i = Tb(beta, n);
-
-                    tmp = zeros(2, 1);
-                    for k = 1:gq_tri_n
-                        x0 = gq_tri_x0(k);
-                        y0 = gq_tri_y0(k);
-                        x = gq_tri_x(n, k);
-                        y = gq_tri_y(n, k);  
-
-                        fval = f(x, y, t_next);
-                        phii = velocity_test_ref(beta, x0, y0);
-
-                        tmp(1) = tmp(1) + gq_tri_w(k) * fval(1) * phii;
-                        tmp(2) = tmp(2) + gq_tri_w(k) * fval(2) * phii;
-                    end
-                    tmp = tmp * abs(Jac(n));
-
-                    b1(i) = b1(i) + tmp(1);
-                    b2(i) = b2(i) + tmp(2);
-                end
-            end
-            b_next = [b1; b2; bO];
-
-            b_tilde = theta * b_next + (1.0-theta) * b_cur + A_res * x_cur;
-
+            b_tilde = b + bN;
+            
             % Dirichlet Boundary for velocity
             for k = 1:nbn
                 if boundary_node(1, k) == -1
                     i = boundary_node(2, k);
                     g = u(Pb(1, i), Pb(2, i), t_next);
 
+                    A_tilde(i, :) = 0;
+                    A_tilde(i, i) = 1;
+
+                    A_tilde(Nb_velocity + i, :) = 0;
+                    A_tilde(Nb_velocity + i, Nb_velocity + i) = 1;
+                    
                     b_tilde(i) = g(1);
                     b_tilde(Nb_velocity + i) = g(2);
                 end
             end
-
+    
             % Dirichlet Boundary for pressure
             node_flag = false(1, Nb_pressure);
             for k = 1:nbe
@@ -448,6 +388,9 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
                         node_flag(n_end1) = true;
                         i = n_end1;
 
+                        A_tilde(2*Nb_velocity+i, :) = 0;
+                        A_tilde(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                        
                         g = p(P(1, i), P(2, i), t_next);
                         b_tilde(2*Nb_velocity+i) = g;
                     end
@@ -456,6 +399,9 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
                         node_flag(n_end2) = true;
                         i = n_end2;
 
+                        A_tilde(2*Nb_velocity+i, :) = 0;
+                        A_tilde(2*Nb_velocity+i, 2*Nb_velocity+i) = 1;
+                        
                         g = p(P(1, i), P(2, i), t_next);
                         b_tilde(2*Nb_velocity+i) = g;
                     end
@@ -464,18 +410,35 @@ function [errnorm_velocity, errnorm_pressure] = solve_2d_unsteady_navier_stokes(
 
             % Solve
             x_next = A_tilde\b_tilde;
+            u_old = u_sol;
+            p_old = p_sol;
             for i = 1:Nb_velocity
                 u_sol(1, i) = x_next(i);
                 u_sol(2, i) = x_next(Nb_velocity+i);
             end
             for i = 1:Nb_pressure
                 p_sol(i) = x_next(2*Nb_velocity+i);
-            end            
+            end
+            
+            newton_diff_velocity = 0.0;
+            for i = 1:Nb_velocity
+                newton_diff_velocity = newton_diff_velocity + norm(u_sol(:, i) - u_old(:, i), 'Inf');
+            end
+            newton_diff_velocity = newton_diff_velocity / Nb_velocity;
+            newton_diff_pressure = 0.0;
+            for i = 1:Nb_pressure
+                newton_diff_pressure = newton_diff_pressure + abs(p_sol(i) - p_old(i));
+            end
+            newton_diff_pressure = newton_diff_pressure / Nb_pressure;
+            
+            fprintf("    Iter%d: diff_V=%16.8e, diff_p=%16.8e\n", newton_iter, newton_diff_velocity, newton_diff_pressure);
+            if newton_diff_velocity < 1e-8 && newton_diff_pressure < 1e-8
+                converged = true;
+            end
         end
         
         % Update
         t_cur = t_next;
-        b_cur = b_next;
         x_cur = x_next;
     end
     
